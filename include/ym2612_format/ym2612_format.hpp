@@ -1,0 +1,14 @@
+#pragma once
+
+/// Convenience header — includes all public headers.
+
+#include "converter.hpp"
+#include "ctrmml.hpp"
+#include "dmp.hpp"
+#include "format.hpp"
+#include "fui.hpp"
+#include "gin.hpp"
+#include "ginpkg.hpp"
+#include "patch.hpp"
+#include "result.hpp"
+#include "rym2612.hpp"
