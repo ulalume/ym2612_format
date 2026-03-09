@@ -28,7 +28,10 @@ T read_le(const uint8_t *buf, size_t size, size_t offset) {
   return value;
 }
 
-bool parse_fm_feature(const uint8_t *data, size_t size, Patch &result) {
+// ---- FM feature ----
+
+bool parse_fm_feature(const uint8_t *data, size_t size, Patch &result,
+                      uint16_t format_version) {
   if (size < 4)
     return false;
 
@@ -41,7 +44,9 @@ bool parse_fm_feature(const uint8_t *data, size_t size, Patch &result) {
   result.fms = data[2] & 0x07;
   result.ams = (data[2] >> 3) & 0x03;
 
-  size_t offset = 4;
+  // Header is 4 bytes normally, 5 bytes for format version >= 224
+  // (extra "Block" byte at position 4)
+  size_t offset = (format_version >= 224) ? 5 : 4;
   constexpr size_t stride = 8;
 
   for (uint8_t i = 0; i < op_count; ++i, offset += stride) {
@@ -49,29 +54,289 @@ bool parse_fm_feature(const uint8_t *data, size_t size, Patch &result) {
       return false;
 
     auto &op = result.operators[i];
-    const uint8_t reg30 = data[offset + 0];
-    const uint8_t reg40 = data[offset + 1];
-    const uint8_t reg50 = data[offset + 2];
-    const uint8_t reg60 = data[offset + 3];
-    const uint8_t reg70 = data[offset + 4];
-    const uint8_t reg80 = data[offset + 5];
-    const uint8_t reg90 = data[offset + 6];
+    // FINS FM operator byte layout:
+    //   byte 0: |KSR| DT | MULT |
+    //   byte 1: |SUS|    TL     |
+    //   byte 2: | RS |VIB|  AR  |     ← RS (= KS) at bits 6-7
+    //   byte 3: |AM |KSL|  DR  |     ← AM at bit 7, KSL (OPL) at bits 5-6
+    //   byte 4: |EGT|KVS|  D2R |     ← D2R = SR
+    //   byte 5: | SL  |   RR   |
+    //   byte 6: | DVB  |  SSG  |
+    //   byte 7: |DAM|DT2|  WS  |
+    const uint8_t b0 = data[offset + 0];
+    const uint8_t b1 = data[offset + 1];
+    const uint8_t b2 = data[offset + 2];
+    const uint8_t b3 = data[offset + 3];
+    const uint8_t b4 = data[offset + 4];
+    const uint8_t b5 = data[offset + 5];
+    const uint8_t b6 = data[offset + 6];
 
-    op.dt = detune_from_linear(reg30 >> 4);
-    op.ml = reg30 & 0x0F;
-    op.tl = reg40 & 0x7F;
-    op.ar = reg50 & 0x1F;
-    op.dr = reg60 & 0x1F;
-    op.sr = reg70 & 0x1F;
-    op.rr = reg80 & 0x0F;
-    op.sl = (reg80 >> 4) & 0x0F;
-    op.ks = (reg60 >> 5) & 0x03;
-    op.am = ((reg60 >> 7) & 0x01) != 0;
-    op.ssg_enable = (reg90 & 0x08) != 0;
-    op.ssg = reg90 & 0x07;
+    op.dt = detune_from_linear((b0 >> 4) & 0x07);
+    op.ml = b0 & 0x0F;
+    op.tl = b1 & 0x7F;
+    op.ks = (b2 >> 6) & 0x03;       // RS from byte 2 bits 6-7
+    op.ar = b2 & 0x1F;
+    op.am = ((b3 >> 7) & 0x01) != 0; // AM from byte 3 bit 7
+    op.dr = b3 & 0x1F;
+    op.sr = b4 & 0x1F;               // D2R = SR
+    op.sl = (b5 >> 4) & 0x0F;
+    op.rr = b5 & 0x0F;
+    op.ssg_enable = (b6 & 0x08) != 0;
+    op.ssg = b6 & 0x07;
   }
   return true;
 }
+
+// ---- Macro feature parsing ----
+
+/// Read a single Macro entry from a MA/O1-O4 block stream.
+/// Returns the number of bytes consumed, or 0 on error.
+size_t read_one_macro(const uint8_t *data, size_t size, size_t pos,
+                      uint8_t &code_out, Macro &macro_out) {
+  if (pos >= size)
+    return 0;
+  code_out = data[pos];
+  if (code_out == 255)
+    return 1; // end marker
+
+  if (pos + 8 > size)
+    return 0;
+
+  uint8_t length = data[pos + 1];
+  uint8_t loop = data[pos + 2];
+  uint8_t release = data[pos + 3];
+  uint8_t mode = data[pos + 4];
+  uint8_t type_byte = data[pos + 5];
+  uint8_t delay = data[pos + 6];
+  uint8_t speed = data[pos + 7];
+
+  uint8_t word_size_code = (type_byte >> 6) & 0x03;
+  uint8_t macro_type = (type_byte >> 1) & 0x03;
+
+  size_t bytes_per_val = 1;
+  switch (word_size_code) {
+  case 2: bytes_per_val = 2; break;
+  case 3: bytes_per_val = 4; break;
+  default: break;
+  }
+
+  size_t data_bytes = static_cast<size_t>(length) * bytes_per_val;
+  if (pos + 8 + data_bytes > size)
+    return 0;
+
+  Macro m;
+  m.loop = loop;
+  m.release = release;
+  m.type = static_cast<MacroType>(macro_type);
+  m.delay = delay;
+  m.speed = speed;
+  m.values.reserve(length);
+
+  size_t vpos = pos + 8;
+  for (uint8_t i = 0; i < length; ++i) {
+    int32_t val = 0;
+    switch (word_size_code) {
+    case 0: val = data[vpos]; vpos += 1; break;
+    case 1: val = static_cast<int8_t>(data[vpos]); vpos += 1; break;
+    case 2:
+      val = static_cast<int16_t>(
+          static_cast<uint16_t>(data[vpos] | (data[vpos + 1] << 8)));
+      vpos += 2;
+      break;
+    case 3:
+      val = static_cast<int32_t>(
+          static_cast<uint32_t>(data[vpos] | (data[vpos + 1] << 8) |
+                                (data[vpos + 2] << 16) |
+                                (data[vpos + 3] << 24)));
+      vpos += 4;
+      break;
+    }
+    m.values.push_back(val);
+  }
+
+  macro_out = std::move(m);
+  return 8 + data_bytes;
+}
+
+bool parse_ma_feature(const uint8_t *data, size_t size,
+                      ChannelMacros &macros) {
+  size_t pos = 0;
+  while (pos < size) {
+    uint8_t code;
+    Macro m;
+    size_t consumed = read_one_macro(data, size, pos, code, m);
+    if (consumed == 0)
+      break;
+    pos += consumed;
+    if (code == 255)
+      break;
+
+    Macro *target = nullptr;
+    switch (code) {
+    case 0:  target = &macros.volume; break;
+    case 1:  target = &macros.arpeggio; break;
+    case 2:  target = &macros.duty; break;
+    case 3:  target = &macros.wave; break;
+    case 4:  target = &macros.pitch; break;
+    case 5:  target = &macros.ex1; break;
+    case 6:  target = &macros.ex2; break;
+    case 7:  target = &macros.ex3; break;
+    case 8:  target = &macros.algorithm; break;
+    case 9:  target = &macros.feedback; break;
+    case 10: target = &macros.fms; break;
+    case 11: target = &macros.ams; break;
+    case 12: target = &macros.pan_left; break;
+    case 13: target = &macros.pan_right; break;
+    case 14: target = &macros.phase_reset; break;
+    default: break;
+    }
+    if (target)
+      *target = std::move(m);
+  }
+  return true;
+}
+
+bool parse_op_macro_feature(const uint8_t *data, size_t size,
+                            OperatorMacros &op_macros) {
+  size_t pos = 0;
+  while (pos < size) {
+    uint8_t code;
+    Macro m;
+    size_t consumed = read_one_macro(data, size, pos, code, m);
+    if (consumed == 0)
+      break;
+    pos += consumed;
+    if (code == 255)
+      break;
+
+    Macro *target = nullptr;
+    switch (code) {
+    case 0:  target = &op_macros.tl; break;
+    case 1:  target = &op_macros.ar; break;
+    case 2:  target = &op_macros.dr; break;
+    case 3:  target = &op_macros.d2r; break;
+    case 4:  target = &op_macros.rr; break;
+    case 5:  target = &op_macros.sl; break;
+    case 6:  target = &op_macros.dt; break;
+    case 7:  target = &op_macros.ml; break;
+    case 8:  target = &op_macros.rs; break;
+    case 9:  target = &op_macros.ssg; break;
+    case 10: target = &op_macros.am; break;
+    default: break;
+    }
+    if (target)
+      *target = std::move(m);
+  }
+  return true;
+}
+
+// ---- Macro serialization ----
+
+/// Determine the minimal word size code for a macro's values.
+uint8_t macro_word_size(const Macro &m) {
+  bool need_signed = false;
+  bool need_16 = false;
+  bool need_32 = false;
+  for (int32_t v : m.values) {
+    if (v < 0)
+      need_signed = true;
+    if (v < -128 || v > 127)
+      need_16 = true;
+    if (v < -32768 || v > 32767)
+      need_32 = true;
+  }
+  if (need_32)
+    return 3; // i32
+  if (need_16)
+    return 2; // i16
+  if (need_signed)
+    return 1; // i8
+  return 0;   // u8
+}
+
+void write_one_macro(std::vector<uint8_t> &out, uint8_t code,
+                     const Macro &m) {
+  if (m.empty())
+    return;
+
+  uint8_t ws = macro_word_size(m);
+  uint8_t type_byte = static_cast<uint8_t>((ws << 6) |
+      (static_cast<uint8_t>(m.type) << 1));
+
+  out.push_back(code);
+  out.push_back(static_cast<uint8_t>(m.values.size()));
+  out.push_back(m.loop);
+  out.push_back(m.release);
+  out.push_back(0); // mode
+  out.push_back(type_byte);
+  out.push_back(m.delay);
+  out.push_back(m.speed);
+
+  for (int32_t v : m.values) {
+    switch (ws) {
+    case 0:
+      out.push_back(static_cast<uint8_t>(v));
+      break;
+    case 1:
+      out.push_back(static_cast<uint8_t>(static_cast<int8_t>(v)));
+      break;
+    case 2: {
+      auto u = static_cast<uint16_t>(static_cast<int16_t>(v));
+      out.push_back(static_cast<uint8_t>(u & 0xFF));
+      out.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+      break;
+    }
+    case 3: {
+      auto u = static_cast<uint32_t>(v);
+      out.push_back(static_cast<uint8_t>(u & 0xFF));
+      out.push_back(static_cast<uint8_t>((u >> 8) & 0xFF));
+      out.push_back(static_cast<uint8_t>((u >> 16) & 0xFF));
+      out.push_back(static_cast<uint8_t>((u >> 24) & 0xFF));
+      break;
+    }
+    }
+  }
+}
+
+std::vector<uint8_t> serialize_ma(const ChannelMacros &macros) {
+  std::vector<uint8_t> out;
+  write_one_macro(out, 0, macros.volume);
+  write_one_macro(out, 1, macros.arpeggio);
+  write_one_macro(out, 2, macros.duty);
+  write_one_macro(out, 3, macros.wave);
+  write_one_macro(out, 4, macros.pitch);
+  write_one_macro(out, 5, macros.ex1);
+  write_one_macro(out, 6, macros.ex2);
+  write_one_macro(out, 7, macros.ex3);
+  write_one_macro(out, 8, macros.algorithm);
+  write_one_macro(out, 9, macros.feedback);
+  write_one_macro(out, 10, macros.fms);
+  write_one_macro(out, 11, macros.ams);
+  write_one_macro(out, 12, macros.pan_left);
+  write_one_macro(out, 13, macros.pan_right);
+  write_one_macro(out, 14, macros.phase_reset);
+  out.push_back(255); // end marker
+  return out;
+}
+
+std::vector<uint8_t> serialize_op_macro(const OperatorMacros &om) {
+  std::vector<uint8_t> out;
+  write_one_macro(out, 0, om.tl);
+  write_one_macro(out, 1, om.ar);
+  write_one_macro(out, 2, om.dr);
+  write_one_macro(out, 3, om.d2r);
+  write_one_macro(out, 4, om.rr);
+  write_one_macro(out, 5, om.sl);
+  write_one_macro(out, 6, om.dt);
+  write_one_macro(out, 7, om.ml);
+  write_one_macro(out, 8, om.rs);
+  write_one_macro(out, 9, om.ssg);
+  write_one_macro(out, 10, om.am);
+  out.push_back(255);
+  return out;
+}
+
+// ---- FINS parsers ----
 
 ParseResult parse_new(const uint8_t *data, size_t size,
                       const std::string &fallback_name) {
@@ -79,6 +344,8 @@ ParseResult parse_new(const uint8_t *data, size_t size,
       !std::equal(kFinsMagic.begin(), kFinsMagic.end(), data))
     return Error{"Not a FINS format"};
 
+  uint16_t format_version =
+      static_cast<uint16_t>(data[4] | (data[5] << 8));
   uint16_t instrument_type =
       static_cast<uint16_t>(data[6] | (data[7] << 8));
   if (instrument_type != 1)
@@ -112,7 +379,22 @@ ParseResult parse_new(const uint8_t *data, size_t size,
       result.name.assign(data + pos, end);
       name_loaded = true;
     } else if (feature_name == "FM") {
-      fm_loaded = parse_fm_feature(data + pos, feature_length, result);
+      fm_loaded =
+          parse_fm_feature(data + pos, feature_length, result, format_version);
+    } else if (feature_name == "MA") {
+      parse_ma_feature(data + pos, feature_length, result.macros);
+    } else if (feature_name == "O1") {
+      parse_op_macro_feature(data + pos, feature_length,
+                             result.operator_macros[0]);
+    } else if (feature_name == "O2") {
+      parse_op_macro_feature(data + pos, feature_length,
+                             result.operator_macros[1]);
+    } else if (feature_name == "O3") {
+      parse_op_macro_feature(data + pos, feature_length,
+                             result.operator_macros[2]);
+    } else if (feature_name == "O4") {
+      parse_op_macro_feature(data + pos, feature_length,
+                             result.operator_macros[3]);
     } else if (feature_name == "EN") {
       break;
     }
@@ -251,7 +533,7 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
 
 SerializeResult serialize(const Patch &patch) {
   std::vector<uint8_t> bytes;
-  bytes.reserve(4 + 2 + 2 + 64);
+  bytes.reserve(4 + 2 + 2 + 128);
 
   // Header: magic + version (0) + instrument type (1 = FM)
   bytes.insert(bytes.end(), kFinsMagic.begin(), kFinsMagic.end());
@@ -300,33 +582,60 @@ SerializeResult serialize(const Patch &patch) {
 
     for (int i = 0; i < 4; ++i) {
       const auto &op = patch.operators[i];
-      uint8_t reg30 = static_cast<uint8_t>(
-          (detune_to_linear(op.dt) & 0x0F) << 4 | (op.ml & 0x0F));
-      uint8_t reg40 = static_cast<uint8_t>(op.tl & 0x7F);
-      uint8_t reg50 = static_cast<uint8_t>(op.ar & 0x1F);
-      uint8_t reg60 = static_cast<uint8_t>(
-          (op.dr & 0x1F) | ((op.ks & 0x03) << 5) | (op.am ? 0x80 : 0x00));
-      uint8_t reg70 = static_cast<uint8_t>(op.sr & 0x1F);
-      uint8_t reg80 = static_cast<uint8_t>((op.rr & 0x0F) |
-                                            ((op.sl & 0x0F) << 4));
-      uint8_t reg90 =
-          op.ssg_enable
-              ? static_cast<uint8_t>(0x08 | (op.ssg & 0x07))
-              : 0;
-      uint8_t reg94 = 0;
+      // FINS FM operator byte layout:
+      //   byte 0: |KSR| DT | MULT |
+      //   byte 1: |SUS|    TL     |
+      //   byte 2: | RS |VIB|  AR  |     ← RS (= KS) at bits 6-7
+      //   byte 3: |AM |KSL|  DR  |     ← AM at bit 7
+      //   byte 4: |EGT|KVS|  D2R |     ← D2R = SR
+      //   byte 5: | SL  |   RR   |
+      //   byte 6: | DVB  |  SSG  |
+      //   byte 7: |DAM|DT2|  WS  |
+      uint8_t b0 = static_cast<uint8_t>(
+          ((detune_to_linear(op.dt) & 0x07) << 4) | (op.ml & 0x0F));
+      uint8_t b1 = static_cast<uint8_t>(op.tl & 0x7F);
+      uint8_t b2 = static_cast<uint8_t>(
+          ((op.ks & 0x03) << 6) | (op.ar & 0x1F));
+      uint8_t b3 = static_cast<uint8_t>(
+          (op.am ? 0x80 : 0x00) | (op.dr & 0x1F));
+      uint8_t b4 = static_cast<uint8_t>(op.sr & 0x1F);
+      uint8_t b5 = static_cast<uint8_t>(
+          ((op.sl & 0x0F) << 4) | (op.rr & 0x0F));
+      uint8_t b6 = op.ssg_enable
+          ? static_cast<uint8_t>(0x08 | (op.ssg & 0x07))
+          : 0;
+      uint8_t b7 = 0;
 
-      fm.push_back(reg30);
-      fm.push_back(reg40);
-      fm.push_back(reg50);
-      fm.push_back(reg60);
-      fm.push_back(reg70);
-      fm.push_back(reg80);
-      fm.push_back(reg90);
-      fm.push_back(reg94);
+      fm.push_back(b0);
+      fm.push_back(b1);
+      fm.push_back(b2);
+      fm.push_back(b3);
+      fm.push_back(b4);
+      fm.push_back(b5);
+      fm.push_back(b6);
+      fm.push_back(b7);
     }
 
     const char code[2] = {'F', 'M'};
     write_feature(code, fm);
+  }
+
+  // MA feature (channel macros) — only if macros present
+  if (!patch.macros.empty()) {
+    auto payload = serialize_ma(patch.macros);
+    const char code[2] = {'M', 'A'};
+    write_feature(code, payload);
+  }
+
+  // O1-O4 features (per-operator macros)
+  {
+    const char codes[4][2] = {{'O', '1'}, {'O', '2'}, {'O', '3'}, {'O', '4'}};
+    for (int i = 0; i < 4; ++i) {
+      if (!patch.operator_macros[i].empty()) {
+        auto payload = serialize_op_macro(patch.operator_macros[i]);
+        write_feature(codes[i], payload);
+      }
+    }
   }
 
   // EN feature (end marker)

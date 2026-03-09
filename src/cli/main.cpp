@@ -52,6 +52,11 @@ std::string extension_of(const fs::path &path) {
   return ext;
 }
 
+void print_macro_summary(const char *name, const Macro &m) {
+  if (!m.empty())
+    std::cout << name << "(" << m.values.size() << ")";
+}
+
 void print_patch(const Patch &patch, size_t index = 0) {
   std::cout << "--- Patch";
   if (index > 0)
@@ -86,6 +91,64 @@ void print_patch(const Patch &patch, size_t index = 0) {
     if (!op.enable)
       std::cout << " (disabled)";
     std::cout << "\n";
+  }
+
+  // Macro summary
+  if (patch.has_macros()) {
+    const auto &cm = patch.macros;
+    if (!cm.empty()) {
+      std::cout << "Macros:    ";
+      bool first = true;
+      auto show = [&](const char *name, const Macro &m) {
+        if (!m.empty()) {
+          if (!first) std::cout << ", ";
+          std::cout << name << "(" << m.values.size() << ")";
+          first = false;
+        }
+      };
+      show("volume", cm.volume);
+      show("arpeggio", cm.arpeggio);
+      show("duty", cm.duty);
+      show("wave", cm.wave);
+      show("pitch", cm.pitch);
+      show("ex1", cm.ex1);
+      show("ex2", cm.ex2);
+      show("ex3", cm.ex3);
+      show("algorithm", cm.algorithm);
+      show("feedback", cm.feedback);
+      show("fms", cm.fms);
+      show("ams", cm.ams);
+      show("pan_left", cm.pan_left);
+      show("pan_right", cm.pan_right);
+      show("phase_reset", cm.phase_reset);
+      std::cout << "\n";
+    }
+    for (int i = 0; i < 4; ++i) {
+      const auto &om = patch.operator_macros[i];
+      if (!om.empty()) {
+        std::cout << "OP" << (i + 1) << " Macros: ";
+        bool first = true;
+        auto show = [&](const char *name, const Macro &m) {
+          if (!m.empty()) {
+            if (!first) std::cout << ", ";
+            std::cout << name << "(" << m.values.size() << ")";
+            first = false;
+          }
+        };
+        show("tl", om.tl);
+        show("ar", om.ar);
+        show("dr", om.dr);
+        show("d2r", om.d2r);
+        show("rr", om.rr);
+        show("sl", om.sl);
+        show("dt", om.dt);
+        show("ml", om.ml);
+        show("rs", om.rs);
+        show("ssg", om.ssg);
+        show("am", om.am);
+        std::cout << "\n";
+      }
+    }
   }
 }
 

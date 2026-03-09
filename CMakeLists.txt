@@ -32,6 +32,7 @@ add_library(ym2612_format STATIC
   src/dmf.cpp
   src/dmp.cpp
   src/fui.cpp
+  src/fur.cpp
   src/gin.cpp
   src/ginpkg.cpp
   src/rym2612.cpp

@@ -8,6 +8,7 @@
 #include "dmp.hpp"
 #include "format.hpp"
 #include "fui.hpp"
+#include "fur.hpp"
 #include "gin.hpp"
 #include "ginpkg.hpp"
 #include "patch.hpp"

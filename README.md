@@ -4,17 +4,18 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 
 ## Supported formats
 
-| Extension  | Name               | Read | Write | Notes                 |
-| ---------- | ------------------ | :--: | :---: | --------------------- |
-| `.dmp`     | DefleMask Preset   |  o   |   o   |                       |
-| `.dmf`     | DefleMask Module   |  o   |       | Extracts FM instruments |
-| `.fui`     | Furnace Instrument |  o   |   o   | FINS + legacy         |
-| `.rym2612` | RYM2612 Preset     |  o   |       | XML                   |
-| `.mml`     | ctrmml (MML)       |  o   |   o   | Text                  |
-| `.gin`     | GIN (JSON)         |  o   |   o   |                       |
-| `.ginpkg`  | GINPKG (ZIP)       |  o   |       | Extracts all versions |
+| Extension  | Name               | Read | Write | Macros | Notes                          |
+| ---------- | ------------------ | :--: | :---: | :----: | ------------------------------ |
+| `.dmp`     | DefleMask Preset   |  o   |   o   |        |                                |
+| `.dmf`     | DefleMask Module   |  o   |       |        | Extracts FM instruments        |
+| `.fui`     | Furnace Instrument |  o   |   o   |   o    | FINS + legacy                  |
+| `.fur`     | Furnace Module     |  o   |       |   o    | Extracts FM instruments        |
+| `.rym2612` | RYM2612 Preset     |  o   |       |        | XML                            |
+| `.mml`     | ctrmml (MML)       |  o   |   o   |        | Pitch macro output as `@M`     |
+| `.gin`     | GIN (JSON)         |  o   |   o   |   o    |                                |
+| `.ginpkg`  | GINPKG (ZIP)       |  o   |       |        | Extracts all versions          |
 
-> **Note:** Only FM instrument parameters are supported. Instrument macros (volume, arpeggio, duty, etc.) are not handled.
+Instrument macros (volume, arpeggio, pitch, per-operator TL/AR, etc.) are read/written in FUI, FUR, and GIN. MML export includes pitch macros as commented `@M` definitions.
 
 ## Build
 

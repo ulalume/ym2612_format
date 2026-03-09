@@ -699,6 +699,616 @@ bool test_full_parameter_roundtrip() {
   return true;
 }
 
+// ---- FUI macro roundtrip tests ----
+
+/// Helper to compare macros
+static bool macros_equal(const Macro &a, const Macro &b) {
+  if (a.empty() != b.empty()) return false;
+  if (a.empty()) return true;
+  return a.values == b.values && a.loop == b.loop && a.release == b.release &&
+         a.type == b.type && a.speed == b.speed && a.delay == b.delay;
+}
+
+/// Create a patch with channel macros and verify FUI roundtrip.
+bool test_fui_channel_macro_roundtrip() {
+  Patch patch;
+  patch.name = "macro_test";
+  patch.algorithm = 2;
+  patch.feedback = 3;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 1; op.ml = 3;
+    op.dt = 4;
+  }
+
+  // Volume macro: u8 values
+  patch.macros.volume.values = {15, 14, 13, 12, 10, 8, 6, 4};
+  patch.macros.volume.loop = 2;
+  patch.macros.volume.release = 6;
+  patch.macros.volume.speed = 1;
+  patch.macros.volume.delay = 0;
+  patch.macros.volume.type = MacroType::Sequence;
+
+  // Arpeggio macro: i8 values (negative)
+  patch.macros.arpeggio.values = {0, 12, -12, 7, -5};
+  patch.macros.arpeggio.loop = 255;
+  patch.macros.arpeggio.release = 255;
+  patch.macros.arpeggio.speed = 2;
+  patch.macros.arpeggio.delay = 1;
+  patch.macros.arpeggio.type = MacroType::Sequence;
+
+  // Pitch macro: i16 values (large range)
+  patch.macros.pitch.values = {-300, 200, -150, 500, 0};
+  patch.macros.pitch.loop = 0;
+  patch.macros.pitch.release = 3;
+  patch.macros.pitch.speed = 1;
+  patch.macros.pitch.delay = 0;
+  patch.macros.pitch.type = MacroType::Sequence;
+
+  // Algorithm macro: single value
+  patch.macros.algorithm.values = {2};
+  patch.macros.algorithm.loop = 255;
+  patch.macros.algorithm.release = 255;
+  patch.macros.algorithm.speed = 1;
+  patch.macros.algorithm.delay = 0;
+  patch.macros.algorithm.type = MacroType::Sequence;
+
+  // Serialize to FUI
+  auto ser = fui::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &fui_bytes = get_ok(ser);
+
+  // Parse back
+  auto parsed = fui::parse(fui_bytes.data(), fui_bytes.size(), "macro_test");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  // Check static params first
+  ASSERT_EQ(rp.algorithm, 2);
+  ASSERT_EQ(rp.feedback, 3);
+
+  // Check macros
+  ASSERT_TRUE(macros_equal(patch.macros.volume, rp.macros.volume));
+  ASSERT_TRUE(macros_equal(patch.macros.arpeggio, rp.macros.arpeggio));
+  ASSERT_TRUE(macros_equal(patch.macros.pitch, rp.macros.pitch));
+  ASSERT_TRUE(macros_equal(patch.macros.algorithm, rp.macros.algorithm));
+
+  // Unused macros should be empty
+  ASSERT_TRUE(rp.macros.duty.empty());
+  ASSERT_TRUE(rp.macros.wave.empty());
+  ASSERT_TRUE(rp.macros.feedback.empty());
+  ASSERT_TRUE(rp.macros.fms.empty());
+  ASSERT_TRUE(rp.macros.ams.empty());
+  ASSERT_TRUE(rp.macros.pan_left.empty());
+  ASSERT_TRUE(rp.macros.pan_right.empty());
+  ASSERT_TRUE(rp.macros.phase_reset.empty());
+  ASSERT_TRUE(rp.macros.ex1.empty());
+  ASSERT_TRUE(rp.macros.ex2.empty());
+  ASSERT_TRUE(rp.macros.ex3.empty());
+
+  return true;
+}
+
+/// Create a patch with operator macros and verify FUI roundtrip.
+bool test_fui_operator_macro_roundtrip() {
+  Patch patch;
+  patch.name = "op_macro_test";
+  patch.algorithm = 4;
+  patch.feedback = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 25; op.dr = 12; op.sr = 8; op.rr = 6;
+    op.sl = 5; op.tl = 40; op.ks = 0; op.ml = 1;
+    op.dt = 4;
+  }
+
+  // OP1 TL macro
+  patch.operator_macros[0].tl.values = {127, 120, 100, 80, 60, 40};
+  patch.operator_macros[0].tl.loop = 3;
+  patch.operator_macros[0].tl.release = 5;
+  patch.operator_macros[0].tl.speed = 1;
+
+  // OP1 AR macro
+  patch.operator_macros[0].ar.values = {31, 28, 24, 20};
+  patch.operator_macros[0].ar.loop = 255;
+  patch.operator_macros[0].ar.release = 255;
+  patch.operator_macros[0].ar.speed = 1;
+
+  // OP2 DT macro with negative values (i8 range)
+  patch.operator_macros[1].dt.values = {-3, -1, 0, 1, 3};
+  patch.operator_macros[1].dt.loop = 0;
+  patch.operator_macros[1].dt.release = 255;
+  patch.operator_macros[1].dt.speed = 2;
+  patch.operator_macros[1].dt.delay = 3;
+
+  // OP3 ML macro
+  patch.operator_macros[2].ml.values = {1, 2, 3, 4, 5, 6, 7, 8};
+  patch.operator_macros[2].ml.loop = 0;
+  patch.operator_macros[2].ml.release = 255;
+  patch.operator_macros[2].ml.speed = 1;
+
+  // OP4 SSG macro
+  patch.operator_macros[3].ssg.values = {0, 4, 5, 6, 7};
+  patch.operator_macros[3].ssg.loop = 255;
+  patch.operator_macros[3].ssg.release = 255;
+  patch.operator_macros[3].ssg.speed = 1;
+
+  // Serialize to FUI
+  auto ser = fui::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &fui_bytes = get_ok(ser);
+
+  // Parse back
+  auto parsed = fui::parse(fui_bytes.data(), fui_bytes.size(), "op_macro_test");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  // Check OP1 macros
+  ASSERT_TRUE(macros_equal(patch.operator_macros[0].tl, rp.operator_macros[0].tl));
+  ASSERT_TRUE(macros_equal(patch.operator_macros[0].ar, rp.operator_macros[0].ar));
+  ASSERT_TRUE(rp.operator_macros[0].dr.empty());
+
+  // Check OP2 macros
+  ASSERT_TRUE(macros_equal(patch.operator_macros[1].dt, rp.operator_macros[1].dt));
+  ASSERT_TRUE(rp.operator_macros[1].tl.empty());
+
+  // Check OP3 macros
+  ASSERT_TRUE(macros_equal(patch.operator_macros[2].ml, rp.operator_macros[2].ml));
+
+  // Check OP4 macros
+  ASSERT_TRUE(macros_equal(patch.operator_macros[3].ssg, rp.operator_macros[3].ssg));
+
+  return true;
+}
+
+/// Test i32 macro values (large range).
+bool test_fui_macro_i32_values() {
+  Patch patch;
+  patch.name = "i32_macro_test";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // Pitch macro with i32 range values
+  patch.macros.pitch.values = {-50000, 50000, -100, 100, 0};
+  patch.macros.pitch.loop = 255;
+  patch.macros.pitch.release = 255;
+  patch.macros.pitch.speed = 1;
+  patch.macros.pitch.delay = 0;
+
+  auto ser = fui::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &fui_bytes = get_ok(ser);
+
+  auto parsed = fui::parse(fui_bytes.data(), fui_bytes.size(), "i32_macro_test");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  ASSERT_TRUE(macros_equal(patch.macros.pitch, rp.macros.pitch));
+
+  // Verify exact values
+  ASSERT_EQ(rp.macros.pitch.values.size(), 5u);
+  ASSERT_EQ(rp.macros.pitch.values[0], -50000);
+  ASSERT_EQ(rp.macros.pitch.values[1], 50000);
+  ASSERT_EQ(rp.macros.pitch.values[2], -100);
+  ASSERT_EQ(rp.macros.pitch.values[3], 100);
+  ASSERT_EQ(rp.macros.pitch.values[4], 0);
+
+  return true;
+}
+
+/// Test that a patch without macros still roundtrips correctly.
+bool test_fui_no_macro_roundtrip() {
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "bright piano.dmp");
+  ASSERT_TRUE(!bytes.empty());
+
+  auto dmp_result = dmp::parse(bytes.data(), bytes.size(), "bright piano");
+  ASSERT_TRUE(is_ok(dmp_result));
+  const auto &original = get_ok(dmp_result).patches[0];
+
+  // Ensure no macros
+  ASSERT_TRUE(!original.has_macros());
+
+  // FUI roundtrip
+  auto ser = fui::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  auto parsed = fui::parse(get_ok(ser).data(), get_ok(ser).size(), "bright piano");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  ASSERT_TRUE(!rp.has_macros());
+  ASSERT_TRUE(patches_equal(original, rp));
+
+  return true;
+}
+
+/// Test all 15 channel macro codes.
+bool test_fui_all_channel_macro_codes() {
+  Patch patch;
+  patch.name = "all_ch_macros";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // Set all 15 channel macros
+  auto make_macro = [](std::vector<int32_t> vals, uint8_t loop = 255) {
+    Macro m;
+    m.values = std::move(vals);
+    m.loop = loop;
+    m.release = 255;
+    m.speed = 1;
+    m.delay = 0;
+    m.type = MacroType::Sequence;
+    return m;
+  };
+
+  patch.macros.volume      = make_macro({15, 14, 13}, 0);
+  patch.macros.arpeggio    = make_macro({0, 12, 24});
+  patch.macros.duty        = make_macro({1, 2});
+  patch.macros.wave        = make_macro({0, 1, 2, 3});
+  patch.macros.pitch       = make_macro({-100, 0, 100});
+  patch.macros.ex1         = make_macro({1});
+  patch.macros.ex2         = make_macro({2, 3});
+  patch.macros.ex3         = make_macro({4, 5, 6});
+  patch.macros.algorithm   = make_macro({0, 1, 2, 3, 4, 5, 6, 7}, 0);
+  patch.macros.feedback    = make_macro({7, 6, 5, 4});
+  patch.macros.fms         = make_macro({0, 1, 2});
+  patch.macros.ams         = make_macro({0, 1, 2, 3});
+  patch.macros.pan_left    = make_macro({0, 1, 1, 1});
+  patch.macros.pan_right   = make_macro({1, 1, 0, 0});
+  patch.macros.phase_reset = make_macro({0, 1, 0});
+
+  auto ser = fui::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+
+  auto parsed = fui::parse(get_ok(ser).data(), get_ok(ser).size(), "all_ch_macros");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  ASSERT_TRUE(macros_equal(patch.macros.volume, rp.macros.volume));
+  ASSERT_TRUE(macros_equal(patch.macros.arpeggio, rp.macros.arpeggio));
+  ASSERT_TRUE(macros_equal(patch.macros.duty, rp.macros.duty));
+  ASSERT_TRUE(macros_equal(patch.macros.wave, rp.macros.wave));
+  ASSERT_TRUE(macros_equal(patch.macros.pitch, rp.macros.pitch));
+  ASSERT_TRUE(macros_equal(patch.macros.ex1, rp.macros.ex1));
+  ASSERT_TRUE(macros_equal(patch.macros.ex2, rp.macros.ex2));
+  ASSERT_TRUE(macros_equal(patch.macros.ex3, rp.macros.ex3));
+  ASSERT_TRUE(macros_equal(patch.macros.algorithm, rp.macros.algorithm));
+  ASSERT_TRUE(macros_equal(patch.macros.feedback, rp.macros.feedback));
+  ASSERT_TRUE(macros_equal(patch.macros.fms, rp.macros.fms));
+  ASSERT_TRUE(macros_equal(patch.macros.ams, rp.macros.ams));
+  ASSERT_TRUE(macros_equal(patch.macros.pan_left, rp.macros.pan_left));
+  ASSERT_TRUE(macros_equal(patch.macros.pan_right, rp.macros.pan_right));
+  ASSERT_TRUE(macros_equal(patch.macros.phase_reset, rp.macros.phase_reset));
+
+  return true;
+}
+
+// ---- GIN macro roundtrip tests ----
+
+/// GIN macro roundtrip with channel + operator macros.
+bool test_gin_macro_roundtrip() {
+  Patch patch;
+  patch.name = "gin_macro_test";
+  patch.algorithm = 3;
+  patch.feedback = 5;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 1; op.ml = 3; op.dt = 4;
+  }
+
+  // Channel macros
+  patch.macros.volume.values = {15, 14, 13, 12, 10};
+  patch.macros.volume.loop = 2;
+  patch.macros.volume.release = 4;
+  patch.macros.volume.speed = 1;
+
+  patch.macros.arpeggio.values = {0, 12, -12, 7};
+  patch.macros.arpeggio.speed = 2;
+  patch.macros.arpeggio.delay = 1;
+
+  patch.macros.pitch.values = {-300, 200, 0};
+  patch.macros.pitch.loop = 0;
+  patch.macros.pitch.release = 2;
+
+  patch.macros.algorithm.values = {3, 4, 5};
+  patch.macros.feedback.values = {5, 4, 3, 2};
+  patch.macros.fms.values = {0, 1, 2};
+  patch.macros.ams.values = {0, 1};
+  patch.macros.pan_left.values = {1, 1, 0};
+  patch.macros.pan_right.values = {1, 0, 1};
+
+  // Operator macros
+  patch.operator_macros[0].tl.values = {127, 100, 80, 60};
+  patch.operator_macros[0].tl.loop = 1;
+  patch.operator_macros[1].ar.values = {31, 28, 24};
+  patch.operator_macros[2].dt.values = {-3, 0, 3};
+  patch.operator_macros[2].dt.speed = 2;
+  patch.operator_macros[3].ssg.values = {0, 4, 5, 7};
+
+  // Serialize to GIN
+  auto ser = gin::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &gin_bytes = get_ok(ser);
+
+  // Parse back
+  auto parsed = gin::parse(gin_bytes.data(), gin_bytes.size(), "gin_macro_test");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  // Static params
+  ASSERT_TRUE(patches_strict_equal(patch, rp));
+
+  // Channel macros
+  ASSERT_TRUE(macros_equal(patch.macros.volume, rp.macros.volume));
+  ASSERT_TRUE(macros_equal(patch.macros.arpeggio, rp.macros.arpeggio));
+  ASSERT_TRUE(macros_equal(patch.macros.pitch, rp.macros.pitch));
+  ASSERT_TRUE(macros_equal(patch.macros.algorithm, rp.macros.algorithm));
+  ASSERT_TRUE(macros_equal(patch.macros.feedback, rp.macros.feedback));
+  ASSERT_TRUE(macros_equal(patch.macros.fms, rp.macros.fms));
+  ASSERT_TRUE(macros_equal(patch.macros.ams, rp.macros.ams));
+  ASSERT_TRUE(macros_equal(patch.macros.pan_left, rp.macros.pan_left));
+  ASSERT_TRUE(macros_equal(patch.macros.pan_right, rp.macros.pan_right));
+
+  // Unused channel macros should be empty
+  ASSERT_TRUE(rp.macros.duty.empty());
+  ASSERT_TRUE(rp.macros.wave.empty());
+  ASSERT_TRUE(rp.macros.phase_reset.empty());
+  ASSERT_TRUE(rp.macros.ex1.empty());
+  ASSERT_TRUE(rp.macros.ex2.empty());
+  ASSERT_TRUE(rp.macros.ex3.empty());
+
+  // Operator macros
+  ASSERT_TRUE(macros_equal(patch.operator_macros[0].tl, rp.operator_macros[0].tl));
+  ASSERT_TRUE(macros_equal(patch.operator_macros[1].ar, rp.operator_macros[1].ar));
+  ASSERT_TRUE(macros_equal(patch.operator_macros[2].dt, rp.operator_macros[2].dt));
+  ASSERT_TRUE(macros_equal(patch.operator_macros[3].ssg, rp.operator_macros[3].ssg));
+
+  // Unused op macros should be empty
+  ASSERT_TRUE(rp.operator_macros[0].ar.empty());
+  ASSERT_TRUE(rp.operator_macros[1].tl.empty());
+
+  return true;
+}
+
+/// GIN without macros should produce no "macros" key (backward compatible).
+bool test_gin_no_macro_backward_compat() {
+  Patch patch;
+  patch.name = "no_macro";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  ASSERT_TRUE(!patch.has_macros());
+
+  auto ser = gin::serialize(patch);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &gin_bytes = get_ok(ser);
+
+  // Verify no "macros" key in JSON output
+  std::string json_text(gin_bytes.begin(), gin_bytes.end());
+  ASSERT_TRUE(json_text.find("macros") == std::string::npos);
+
+  // Parse back
+  auto parsed = gin::parse(gin_bytes.data(), gin_bytes.size(), "no_macro");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &rp = get_ok(parsed).patches[0];
+
+  ASSERT_TRUE(!rp.has_macros());
+  ASSERT_TRUE(patches_strict_equal(patch, rp));
+
+  return true;
+}
+
+/// FUI → GIN → FUI cross-format macro roundtrip.
+bool test_fui_to_gin_macro_roundtrip() {
+  Patch patch;
+  patch.name = "cross_macro";
+  patch.algorithm = 5;
+  patch.feedback = 4;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 25; op.dr = 12; op.sr = 8; op.rr = 6;
+    op.sl = 5; op.tl = 40; op.ks = 2; op.ml = 4; op.dt = 1;
+  }
+
+  // Channel macros
+  patch.macros.volume.values = {15, 12, 8, 4, 0};
+  patch.macros.volume.loop = 0;
+  patch.macros.pitch.values = {-500, 0, 500};
+  patch.macros.pitch.release = 1;
+  patch.macros.algorithm.values = {5, 4, 3};
+
+  // Op macros
+  patch.operator_macros[0].tl.values = {127, 100, 80};
+  patch.operator_macros[0].tl.loop = 0;
+  patch.operator_macros[2].ml.values = {4, 8, 12, 1};
+  patch.operator_macros[2].ml.speed = 3;
+
+  // FUI roundtrip first (to normalize DT 0→4 via linear encoding)
+  auto fui_ser = fui::serialize(patch);
+  ASSERT_TRUE(is_ok(fui_ser));
+  auto fui_parsed = fui::parse(get_ok(fui_ser).data(), get_ok(fui_ser).size(), "cross_macro");
+  ASSERT_TRUE(is_ok(fui_parsed));
+  const auto &fui_patch = get_ok(fui_parsed).patches[0];
+
+  // FUI → GIN
+  auto gin_ser = gin::serialize(fui_patch);
+  ASSERT_TRUE(is_ok(gin_ser));
+
+  // GIN → Patch
+  auto gin_parsed = gin::parse(get_ok(gin_ser).data(), get_ok(gin_ser).size(), "cross_macro");
+  ASSERT_TRUE(is_ok(gin_parsed));
+  const auto &gin_patch = get_ok(gin_parsed).patches[0];
+
+  // GIN → FUI
+  auto fui_ser2 = fui::serialize(gin_patch);
+  ASSERT_TRUE(is_ok(fui_ser2));
+  auto fui_parsed2 = fui::parse(get_ok(fui_ser2).data(), get_ok(fui_ser2).size(), "cross_macro");
+  ASSERT_TRUE(is_ok(fui_parsed2));
+  const auto &final_patch = get_ok(fui_parsed2).patches[0];
+
+  // Compare FUI→GIN→FUI result with original FUI result
+  ASSERT_TRUE(patches_equal(fui_patch, final_patch));
+
+  // Channel macros
+  ASSERT_TRUE(macros_equal(fui_patch.macros.volume, final_patch.macros.volume));
+  ASSERT_TRUE(macros_equal(fui_patch.macros.pitch, final_patch.macros.pitch));
+  ASSERT_TRUE(macros_equal(fui_patch.macros.algorithm, final_patch.macros.algorithm));
+
+  // Op macros
+  ASSERT_TRUE(macros_equal(fui_patch.operator_macros[0].tl, final_patch.operator_macros[0].tl));
+  ASSERT_TRUE(macros_equal(fui_patch.operator_macros[2].ml, final_patch.operator_macros[2].ml));
+
+  // Unused macros empty
+  ASSERT_TRUE(final_patch.macros.arpeggio.empty());
+  ASSERT_TRUE(final_patch.operator_macros[1].tl.empty());
+
+  return true;
+}
+
+// ---- MML pitch macro output tests ----
+
+/// Verify that MML serialize outputs @M comment for pitch macros.
+bool test_mml_pitch_macro_output() {
+  Patch patch;
+  patch.name = "pitch_mml_test";
+  patch.algorithm = 2;
+  patch.feedback = 3;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // Linear slope: -512, -256, 0, 256, 512 → -2>2:5 in semitones
+  patch.macros.pitch.values = {-512, -256, 0, 256, 512};
+  patch.macros.pitch.speed = 1;
+
+  auto result = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(result));
+  const auto &text = get_ok(result);
+
+  // Must contain @M comment
+  ASSERT_TRUE(text.find("; @M1 ") != std::string::npos);
+  // Must contain "pitch"
+  ASSERT_TRUE(text.find("; pitch") != std::string::npos);
+  // Linear slope -2>2:5
+  ASSERT_TRUE(text.find("-2>2:5") != std::string::npos);
+
+  return true;
+}
+
+/// Test @M output with loop marker and constant hold.
+bool test_mml_pitch_macro_loop_and_hold() {
+  Patch patch;
+  patch.name = "loop_test";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // Slide up then hold: -256, 0 (slope), then 0, 0, 0 (hold with loop)
+  patch.macros.pitch.values = {-256, 0, 0, 0, 0};
+  patch.macros.pitch.loop = 2;  // Loop at index 2 (the constant 0 section)
+  patch.macros.pitch.speed = 1;
+
+  auto result = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(result));
+  const auto &text = get_ok(result);
+
+  // Slope: -1>0:2
+  ASSERT_TRUE(text.find("-1>0:2") != std::string::npos);
+  // Loop marker
+  ASSERT_TRUE(text.find("|") != std::string::npos);
+  // Constant hold: 0:3
+  ASSERT_TRUE(text.find("0:3") != std::string::npos);
+
+  return true;
+}
+
+/// Test @M output with speed > 1 (ticks are multiplied).
+bool test_mml_pitch_macro_speed() {
+  Patch patch;
+  patch.name = "speed_test";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // 3 values with speed=2 → ticks should be doubled
+  patch.macros.pitch.values = {0, 256, 512};
+  patch.macros.pitch.speed = 2;
+
+  auto result = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(result));
+  const auto &text = get_ok(result);
+
+  // 3 values × speed 2 = 6 ticks: 0>2:6
+  ASSERT_TRUE(text.find("0>2:6") != std::string::npos);
+
+  return true;
+}
+
+/// No pitch macro → no @M comment.
+bool test_mml_no_pitch_macro() {
+  Patch patch;
+  patch.name = "no_pitch";
+  patch.algorithm = 0;
+  patch.feedback = 0;
+  patch.left = true;
+  patch.right = true;
+  for (int i = 0; i < 4; ++i) {
+    auto &op = patch.operators[i];
+    op.ar = 20; op.dr = 10; op.sr = 5; op.rr = 8;
+    op.sl = 7; op.tl = 30; op.ks = 0; op.ml = 1; op.dt = 4;
+  }
+
+  // Volume macro present, but no pitch macro
+  patch.macros.volume.values = {15, 14, 13};
+
+  auto result = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(result));
+  const auto &text = get_ok(result);
+
+  // Must NOT contain @M
+  ASSERT_TRUE(text.find("@M") == std::string::npos);
+
+  return true;
+}
+
 // ---- High-level API tests ----
 
 bool test_converter_parse_serialize() {
@@ -762,6 +1372,24 @@ int main() {
 
   std::cout << "\n=== Full parameter roundtrip ===\n";
   RUN_TEST(test_full_parameter_roundtrip);
+
+  std::cout << "\n=== FUI macro roundtrip ===\n";
+  RUN_TEST(test_fui_channel_macro_roundtrip);
+  RUN_TEST(test_fui_operator_macro_roundtrip);
+  RUN_TEST(test_fui_macro_i32_values);
+  RUN_TEST(test_fui_no_macro_roundtrip);
+  RUN_TEST(test_fui_all_channel_macro_codes);
+
+  std::cout << "\n=== GIN macro roundtrip ===\n";
+  RUN_TEST(test_gin_macro_roundtrip);
+  RUN_TEST(test_gin_no_macro_backward_compat);
+  RUN_TEST(test_fui_to_gin_macro_roundtrip);
+
+  std::cout << "\n=== MML pitch macro ===\n";
+  RUN_TEST(test_mml_pitch_macro_output);
+  RUN_TEST(test_mml_pitch_macro_loop_and_hold);
+  RUN_TEST(test_mml_pitch_macro_speed);
+  RUN_TEST(test_mml_no_pitch_macro);
 
   std::cout << "\n=== High-level API ===\n";
   RUN_TEST(test_converter_parse_serialize);

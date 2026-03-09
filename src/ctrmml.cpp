@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <iomanip>
 #include <sstream>
 #include <string>
@@ -48,6 +49,90 @@ bool starts_with_at(const std::string &line) {
   auto first = std::find_if_not(line.begin(), line.end(),
                                  [](unsigned char ch) { return std::isspace(ch); });
   return first != line.end() && *first == '@';
+}
+
+// ---- Pitch macro → @M node conversion ----
+// Furnace pitch unit: 256 = 1 semitone (same scale as MDSDRV @M).
+
+std::string format_semitones(double v) {
+  if (v == 0.0)
+    return "0";
+  double r = std::round(v * 100.0) / 100.0;
+  // Integer
+  if (r == static_cast<int>(r))
+    return std::to_string(static_cast<int>(r));
+  // 1 decimal place if sufficient
+  std::ostringstream os;
+  double r1 = std::round(r * 10.0) / 10.0;
+  os << std::fixed << std::setprecision(r1 == r ? 1 : 2) << r;
+  return os.str();
+}
+
+/// Compress a pitch macro value sequence into ctrmml @M node notation.
+/// Detects constant holds (value:ticks) and linear slopes (start>end:ticks).
+std::string pitch_macro_to_mml_nodes(const Macro &m) {
+  if (m.empty())
+    return {};
+
+  const auto &vals = m.values;
+  unsigned speed = std::max<unsigned>(1, m.speed);
+
+  std::ostringstream out;
+  size_t i = 0;
+  bool first = true;
+
+  while (i < vals.size()) {
+    // Insert loop marker before the loop index
+    if (m.loop != 255 && i == static_cast<size_t>(m.loop)) {
+      if (!first)
+        out << " ";
+      out << "|";
+      first = false;
+    }
+
+    if (!first)
+      out << " ";
+    first = false;
+
+    // Find longest linear run from i (consecutive constant delta).
+    // Do not extend past the loop boundary so | lands correctly.
+    size_t run_end = i + 1;
+    if (i + 1 < vals.size()) {
+      int32_t delta = vals[i + 1] - vals[i];
+      size_t j = i + 2;
+      while (j < vals.size() && vals[j] - vals[j - 1] == delta) {
+        if (m.loop != 255 && j == static_cast<size_t>(m.loop))
+          break;
+        ++j;
+      }
+      run_end = j;
+    }
+
+    size_t run_len = run_end - i;
+    double start_st = vals[i] / 256.0;
+    unsigned ticks = static_cast<unsigned>(run_len) * speed;
+
+    if (run_len >= 2) {
+      double end_st = vals[run_end - 1] / 256.0;
+      if (start_st == end_st) {
+        // Constant hold
+        out << format_semitones(start_st) << ":" << ticks;
+      } else {
+        // Linear slope
+        out << format_semitones(start_st) << ">"
+            << format_semitones(end_st) << ":" << ticks;
+      }
+      i = run_end;
+    } else {
+      // Single value
+      out << format_semitones(start_st);
+      if (speed > 1)
+        out << ":" << speed;
+      ++i;
+    }
+  }
+
+  return out.str();
 }
 
 } // namespace
@@ -281,6 +366,12 @@ SerializeTextResult serialize_text(const Patch &patch) {
   if (!patch.left || !patch.right) {
     auto p = patch.right + (patch.left << 1);
     out << "; p" << p << " ; Panning\n";
+  }
+
+  // Pitch macro as @M comment
+  if (!patch.macros.pitch.empty()) {
+    out << "; @M1 " << pitch_macro_to_mml_nodes(patch.macros.pitch)
+        << " ; pitch\n";
   }
 
   return out.str();
