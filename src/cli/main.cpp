@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include <nlohmann/json.hpp>
+
 namespace fs = std::filesystem;
 using namespace ym2612_format;
 
@@ -17,7 +19,7 @@ namespace {
 void print_usage(const char *prog) {
   std::cerr << "Usage:\n"
             << "  " << prog << " convert <input> -o <output> [-f <format>]\n"
-            << "  " << prog << " info <input>\n"
+            << "  " << prog << " info [--json] <input> [<input2> ...]\n"
             << "  " << prog << " formats\n"
             << "\n"
             << "Commands:\n"
@@ -168,30 +170,97 @@ int cmd_formats() {
   return 0;
 }
 
-int cmd_info(const fs::path &input_path) {
-  auto bytes = read_file(input_path);
-  if (bytes.empty()) {
-    std::cerr << "Error: could not read " << input_path << "\n";
-    return 1;
+std::string patch_mml_body(const Patch &patch) {
+  auto result = ctrmml::serialize_text(patch);
+  if (!is_ok(result))
+    return {};
+  const auto &mml = get_ok(result);
+  // Output is "@1 fm ; name\n...". Strip the "@1 fm" prefix.
+  auto fm_pos = mml.find("fm");
+  if (fm_pos == std::string::npos)
+    return mml;
+  auto body = mml.substr(fm_pos + 2);
+  // Trim the leading space: " ; name\n..." -> "; name\n..."
+  if (!body.empty() && body[0] == ' ')
+    body = body.substr(1);
+  return body;
+}
+
+nlohmann::json patch_to_json(const Patch &patch, const std::string &file) {
+  using json = nlohmann::json;
+  json j;
+  j["file"] = file;
+  j["name"] = patch.name;
+  j["algorithm"] = patch.algorithm;
+  j["feedback"] = patch.feedback;
+  j["has_macros"] = patch.has_macros();
+  j["mml"] = patch_mml_body(patch);
+  return j;
+}
+
+int cmd_info(const std::vector<fs::path> &input_paths, bool json_output) {
+  using json = nlohmann::json;
+
+  json all_patches = json::array();
+  json all_warnings = json::array();
+  int errors = 0;
+
+  for (const auto &input_path : input_paths) {
+    auto bytes = read_file(input_path);
+    if (bytes.empty()) {
+      if (json_output) {
+        all_warnings.push_back("could not read " + input_path.string());
+      } else {
+        std::cerr << "Error: could not read " << input_path << "\n";
+      }
+      ++errors;
+      continue;
+    }
+
+    auto hint = format_from_string(extension_of(input_path));
+    auto stem = input_path.stem().string();
+    auto result = parse(bytes.data(), bytes.size(), hint, stem);
+
+    if (!is_ok(result)) {
+      if (json_output) {
+        all_warnings.push_back(input_path.string() + ": " +
+                               get_error(result).message);
+      } else {
+        std::cerr << "Error: " << get_error(result).message << "\n";
+      }
+      ++errors;
+      continue;
+    }
+
+    const auto &ok = get_ok(result);
+    auto filename = input_path.filename().string();
+
+    for (const auto &w : ok.warnings) {
+      if (json_output) {
+        all_warnings.push_back(filename + ": " + w);
+      } else {
+        std::cerr << "Warning: " << w << "\n";
+      }
+    }
+
+    if (json_output) {
+      for (const auto &patch : ok.patches)
+        all_patches.push_back(patch_to_json(patch, filename));
+    } else {
+      for (size_t i = 0; i < ok.patches.size(); ++i)
+        print_patch(ok.patches[i], ok.patches.size() > 1 ? i + 1 : 0);
+    }
   }
 
-  auto hint = format_from_string(extension_of(input_path));
-  auto stem = input_path.stem().string();
-  auto result = parse(bytes.data(), bytes.size(), hint, stem);
-
-  if (!is_ok(result)) {
-    std::cerr << "Error: " << get_error(result).message << "\n";
-    return 1;
+  if (json_output) {
+    json out;
+    out["patches"] = all_patches;
+    out["warnings"] = all_warnings;
+    std::cout << out.dump() << "\n";
+    return 0; // Always succeed for JSON (errors reported in warnings)
   }
 
-  const auto &ok = get_ok(result);
-  for (const auto &w : ok.warnings)
-    std::cerr << "Warning: " << w << "\n";
-
-  for (size_t i = 0; i < ok.patches.size(); ++i)
-    print_patch(ok.patches[i], ok.patches.size() > 1 ? i + 1 : 0);
-
-  return 0;
+  return errors > 0 ? 1 : 0;
 }
 
 int cmd_convert(const fs::path &input_path, const fs::path &output_path,
@@ -290,11 +359,20 @@ int main(int argc, char *argv[]) {
   }
 
   if (command == "info") {
-    if (argc < 3) {
-      std::cerr << "Usage: " << argv[0] << " info <input>\n";
+    bool json_output = false;
+    std::vector<fs::path> input_paths;
+    for (int i = 2; i < argc; ++i) {
+      if (std::strcmp(argv[i], "--json") == 0) {
+        json_output = true;
+      } else {
+        input_paths.emplace_back(argv[i]);
+      }
+    }
+    if (input_paths.empty()) {
+      std::cerr << "Usage: " << argv[0] << " info [--json] <input> [<input2> ...]\n";
       return 1;
     }
-    return cmd_info(argv[2]);
+    return cmd_info(input_paths, json_output);
   }
 
   if (command == "convert") {
