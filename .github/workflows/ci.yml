@@ -1,0 +1,83 @@
+name: ci
+
+on:
+  push:
+    branches: ["*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: arm64
+            os_name: macos
+          - os: macos-14
+            target: x86_64
+            os_name: macos
+          - os: ubuntu-22.04
+            target: x86_64
+            os_name: linux
+          - os: ubuntu-22.04
+            target: aarch64
+            os_name: linux
+          - os: windows-2022
+            target: x86_64
+            os_name: windows
+          - os: windows-2022
+            target: aarch64
+            os_name: windows
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux cross-compiler
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      # --- Configure ---
+      - name: Configure (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.target }}
+
+      - name: Configure (Linux x64)
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'x86_64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Linux aarch64)
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+
+      - name: Configure (Windows x64)
+        if: matrix.os == 'windows-2022' && matrix.target == 'x86_64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -A x64
+
+      - name: Configure (Windows ARM64)
+        if: matrix.os == 'windows-2022' && matrix.target == 'aarch64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -A ARM64
+
+      # --- Build ---
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Verify binary exists (unix)
+        if: matrix.os != 'windows-2022'
+        run: test -f build/ym2612_convert && echo "OK"
+
+      - name: Verify binary exists (windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          if (Test-Path "build/Release/ym2612_convert.exe") { Write-Host "OK" } else { throw "Binary not found" }

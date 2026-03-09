@@ -1,0 +1,142 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: arm64
+            os_name: macos
+            arch: arm64
+            archive_ext: tar.gz
+          - os: macos-14
+            target: x86_64
+            os_name: macos
+            arch: x64
+            archive_ext: tar.gz
+          - os: ubuntu-22.04
+            target: x86_64
+            os_name: linux
+            arch: x64
+            archive_ext: tar.gz
+          - os: ubuntu-22.04
+            target: aarch64
+            os_name: linux
+            arch: arm64
+            archive_ext: tar.gz
+          - os: windows-2022
+            target: x86_64
+            os_name: windows
+            arch: x64
+            archive_ext: zip
+          - os: windows-2022
+            target: aarch64
+            os_name: windows
+            arch: arm64
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # --- Linux aarch64 cross-compile setup ---
+      - name: Install Linux cross-compiler
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64'
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+
+      # --- Configure ---
+      - name: Configure (macOS)
+        if: matrix.os == 'macos-14'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.target }} \
+            -DYM2612_FORMAT_BUILD_TESTS=OFF
+
+      - name: Configure (Linux x64)
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'x86_64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DYM2612_FORMAT_BUILD_TESTS=OFF
+
+      - name: Configure (Linux aarch64)
+        if: matrix.os == 'ubuntu-22.04' && matrix.target == 'aarch64'
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_SYSTEM_NAME=Linux \
+            -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
+            -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+            -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+            -DYM2612_FORMAT_BUILD_TESTS=OFF
+
+      - name: Configure (Windows x64)
+        if: matrix.os == 'windows-2022' && matrix.target == 'x86_64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -A x64 -DYM2612_FORMAT_BUILD_TESTS=OFF
+
+      - name: Configure (Windows ARM64)
+        if: matrix.os == 'windows-2022' && matrix.target == 'aarch64'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -A ARM64 -DYM2612_FORMAT_BUILD_TESTS=OFF
+
+      # --- Build ---
+      - name: Build
+        run: cmake --build build --config Release
+
+      # --- Package ---
+      - name: Package (unix)
+        if: matrix.os != 'windows-2022'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          BIN="ym2612_convert"
+          SRC="build/${BIN}"
+          mkdir -p dist package
+          cp "${SRC}" "package/${BIN}"
+          tar -czf "dist/ym2612_convert-${VERSION}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.archive_ext }}" -C package "${BIN}"
+
+      - name: Package (windows)
+        if: matrix.os == 'windows-2022'
+        shell: pwsh
+        run: |
+          $version = $env:GITHUB_REF_NAME -replace '^v',''
+          $bin = "ym2612_convert.exe"
+          $src = "build/Release/${bin}"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $src $bin
+          $zip = "dist/ym2612_convert-${version}-${{ matrix.os_name }}-${{ matrix.arch }}.${{ matrix.archive_ext }}"
+          Compress-Archive -Path $bin -DestinationPath $zip -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: dist/*
+
+  release:
+    runs-on: ubuntu-22.04
+    needs: build
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Flatten artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find dist -type f -maxdepth 3 -print0 | xargs -0 -I{} mv {} release/
+
+      - name: Upload Release Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
