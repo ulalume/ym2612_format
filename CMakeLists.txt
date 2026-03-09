@@ -29,6 +29,7 @@ FetchContent_MakeAvailable(json miniz)
 
 # --- Library ---
 add_library(ym2612_format STATIC
+  src/dmf.cpp
   src/dmp.cpp
   src/fui.cpp
   src/gin.cpp
@@ -49,4 +50,18 @@ target_link_libraries(ym2612_format PUBLIC nlohmann_json::nlohmann_json miniz)
 if(YM2612_FORMAT_BUILD_CLI)
   add_executable(ym2612_convert src/cli/main.cpp)
   target_link_libraries(ym2612_convert PRIVATE ym2612_format)
+endif()
+
+# --- Tests ---
+if(YM2612_FORMAT_BUILD_TESTS)
+  enable_testing()
+
+  add_executable(ym2612_format_test test/roundtrip_test.cpp)
+  target_link_libraries(ym2612_format_test PRIVATE ym2612_format)
+  target_compile_definitions(ym2612_format_test PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test"
+    SAMPLE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/sample"
+  )
+
+  add_test(NAME roundtrip_test COMMAND ym2612_format_test)
 endif()

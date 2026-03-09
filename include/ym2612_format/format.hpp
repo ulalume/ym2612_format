@@ -10,6 +10,7 @@ namespace ym2612_format {
 /// Identifies a supported format.
 enum class Format {
   Dmp,     ///< DefleMask Preset (.dmp)
+  Dmf,     ///< DefleMask Module (.dmf) — read-only, extracts FM instruments
   Fui,     ///< Furnace Instrument (.fui)
   Gin,     ///< GIN JSON (.gin)
   Ginpkg,  ///< GINPKG ZIP container (.ginpkg)

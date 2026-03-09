@@ -4,6 +4,7 @@
 
 #include "converter.hpp"
 #include "ctrmml.hpp"
+#include "dmf.hpp"
 #include "dmp.hpp"
 #include "format.hpp"
 #include "fui.hpp"

@@ -1,6 +1,7 @@
 #include "ym2612_format/converter.hpp"
 
 #include "ym2612_format/ctrmml.hpp"
+#include "ym2612_format/dmf.hpp"
 #include "ym2612_format/dmp.hpp"
 #include "ym2612_format/fui.hpp"
 #include "ym2612_format/gin.hpp"
@@ -22,9 +23,10 @@ std::optional<Format> format_from_string(const std::string &s) {
                  [](unsigned char c) { return std::tolower(c); });
 
   static const std::unordered_map<std::string, Format> map = {
-      {"dmp", Format::Dmp},       {"fui", Format::Fui},
-      {"gin", Format::Gin},       {"ginpkg", Format::Ginpkg},
-      {"rym2612", Format::Rym2612}, {"mml", Format::Mml},
+      {"dmp", Format::Dmp},       {"dmf", Format::Dmf},
+      {"fui", Format::Fui},       {"gin", Format::Gin},
+      {"ginpkg", Format::Ginpkg}, {"rym2612", Format::Rym2612},
+      {"mml", Format::Mml},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -35,6 +37,7 @@ std::optional<Format> format_from_string(const std::string &s) {
 const char *format_to_extension(Format f) {
   switch (f) {
   case Format::Dmp:     return "dmp";
+  case Format::Dmf:     return "dmf";
   case Format::Fui:     return "fui";
   case Format::Gin:     return "gin";
   case Format::Ginpkg:  return "ginpkg";
@@ -73,6 +76,8 @@ const std::vector<FormatEntry> &formats() {
   static const std::vector<FormatEntry> entries = {
       {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
        dmp::parse, dmp::serialize, nullptr},
+      {make_info(Format::Dmf, "DefleMask Module", "dmf", true, false),
+       dmf::parse, nullptr, nullptr},
       {make_info(Format::Fui, "Furnace Instrument", "fui", true, true),
        fui::parse, fui::serialize, nullptr},
       {make_info(Format::Gin, "GIN (JSON)", "gin", true, true),

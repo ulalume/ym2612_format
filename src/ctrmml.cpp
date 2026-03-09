@@ -213,6 +213,7 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &fallback_
 
       int ssg_value = row[9];
       op.am = ssg_value >= 100;
+      if (op.am) ssg_value -= 100;
       op.ssg_enable = (ssg_value & 0b1000) != 0;
       op.ssg = ssg_value & 0b0111;
     }

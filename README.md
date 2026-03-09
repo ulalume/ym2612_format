@@ -7,6 +7,7 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 | Extension  | Name               | Read | Write | Notes                 |
 | ---------- | ------------------ | :--: | :---: | --------------------- |
 | `.dmp`     | DefleMask Preset   |  o   |   o   |                       |
+| `.dmf`     | DefleMask Module   |  o   |       | Extracts FM instruments |
 | `.fui`     | Furnace Instrument |  o   |   o   | FINS + legacy         |
 | `.rym2612` | RYM2612 Preset     |  o   |       | XML                   |
 | `.mml`     | ctrmml (MML)       |  o   |   o   | Text                  |
@@ -47,7 +48,7 @@ Dependencies (nlohmann/json, miniz) are fetched automatically via CMake FetchCon
 ./build/ym2612_convert convert input.bin -o output.bin -f dmp
 ```
 
-Files containing multiple patches (MML, GINPKG) are written as separate output files.
+Files containing multiple patches (DMF, MML, GINPKG) are written as separate output files.
 
 ## Library usage
 

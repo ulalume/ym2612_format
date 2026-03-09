@@ -166,11 +166,13 @@ int cmd_convert(const fs::path &input_path, const fs::path &output_path,
     return 1;
   }
 
-  // For multi-patch inputs, convert each patch to a separate file.
-  // Use the patch name as the filename suffix when available.
+  // For multi-patch inputs, use the output path (minus extension) as a
+  // directory and write each patch as a separate file inside it.
   if (ok.patches.size() > 1) {
-    auto dir = output_path.parent_path();
     auto ext = output_path.extension().string();
+    // e.g. -o ./sample/output.fui  →  directory = ./sample/output/
+    auto out_dir = output_path.parent_path() / output_path.stem();
+    fs::create_directories(out_dir);
 
     int errors = 0;
     for (size_t i = 0; i < ok.patches.size(); ++i) {
@@ -181,16 +183,15 @@ int cmd_convert(const fs::path &input_path, const fs::path &output_path,
         ++errors;
         continue;
       }
-      // Use patch name for filename; fall back to index number
       std::string file_stem = ok.patches[i].name;
       if (file_stem.empty())
-        file_stem = output_path.stem().string() + "_" + std::to_string(i + 1);
-      auto named_path = dir / (file_stem + ext);
+        file_stem = std::to_string(i + 1);
+      auto named_path = out_dir / (file_stem + ext);
       if (!write_file(named_path, get_ok(ser))) {
         std::cerr << "Error writing " << named_path << "\n";
         ++errors;
       } else {
-        std::cout << named_path.filename().string() << "\n";
+        std::cout << named_path.string() << "\n";
       }
     }
     return errors > 0 ? 1 : 0;
