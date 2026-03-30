@@ -1,6 +1,6 @@
 #include "ym2612_format/gin.hpp"
 
-#include <nlohmann/json.hpp>
+#include "json_minimal.hpp"
 #include <string>
 
 namespace ym2612_format::gin {
@@ -9,82 +9,84 @@ FormatInfo info() { return {Format::Gin, "GIN (JSON)", "gin", true, true, false}
 
 namespace {
 
-using json = nlohmann::json;
+using Json = json_minimal::Value;
 
-Operator op_from_json(const json &j) {
+Operator op_from_json(const Json &j) {
   Operator op;
-  op.ar = j.at("attack_rate").get<uint8_t>();
-  op.dr = j.at("decay_rate").get<uint8_t>();
-  op.sr = j.at("sustain_rate").get<uint8_t>();
-  op.rr = j.at("release_rate").get<uint8_t>();
-  op.sl = j.at("sustain_level").get<uint8_t>();
-  op.tl = j.at("total_level").get<uint8_t>();
-  op.ks = j.at("key_scale").get<uint8_t>();
-  op.ml = j.at("multiple").get<uint8_t>();
-  op.dt = j.at("detune").get<uint8_t>();
-  op.ssg = j.at("ssg_type_envelope_control").get<uint8_t>();
-  op.ssg_enable = j.at("ssg_enable").get<bool>();
-  op.am = j.at("amplitude_modulation_enable").get<bool>();
+  op.ar = j.at("attack_rate").get_uint8();
+  op.dr = j.at("decay_rate").get_uint8();
+  op.sr = j.at("sustain_rate").get_uint8();
+  op.rr = j.at("release_rate").get_uint8();
+  op.sl = j.at("sustain_level").get_uint8();
+  op.tl = j.at("total_level").get_uint8();
+  op.ks = j.at("key_scale").get_uint8();
+  op.ml = j.at("multiple").get_uint8();
+  op.dt = j.at("detune").get_uint8();
+  op.ssg = j.at("ssg_type_envelope_control").get_uint8();
+  op.ssg_enable = j.at("ssg_enable").get_bool();
+  op.am = j.at("amplitude_modulation_enable").get_bool();
   if (j.contains("enable"))
-    op.enable = j.at("enable").get<bool>();
+    op.enable = j.at("enable").get_bool();
   return op;
 }
 
-json op_to_json(const Operator &op) {
-  return json{
-      {"attack_rate", op.ar},
-      {"decay_rate", op.dr},
-      {"sustain_rate", op.sr},
-      {"release_rate", op.rr},
-      {"sustain_level", op.sl},
-      {"total_level", op.tl},
-      {"key_scale", op.ks},
-      {"multiple", op.ml},
-      {"detune", op.dt},
-      {"ssg_type_envelope_control", op.ssg},
-      {"ssg_enable", op.ssg_enable},
-      {"amplitude_modulation_enable", op.am},
-      {"enable", op.enable},
-  };
+Json op_to_json(const Operator &op) {
+  Json j = Json::object();
+  j["attack_rate"] = Json(static_cast<int>(op.ar));
+  j["decay_rate"] = Json(static_cast<int>(op.dr));
+  j["sustain_rate"] = Json(static_cast<int>(op.sr));
+  j["release_rate"] = Json(static_cast<int>(op.rr));
+  j["sustain_level"] = Json(static_cast<int>(op.sl));
+  j["total_level"] = Json(static_cast<int>(op.tl));
+  j["key_scale"] = Json(static_cast<int>(op.ks));
+  j["multiple"] = Json(static_cast<int>(op.ml));
+  j["detune"] = Json(static_cast<int>(op.dt));
+  j["ssg_type_envelope_control"] = Json(static_cast<int>(op.ssg));
+  j["ssg_enable"] = Json(op.ssg_enable);
+  j["amplitude_modulation_enable"] = Json(op.am);
+  j["enable"] = Json(op.enable);
+  return j;
 }
 
 // ---- Macro JSON support ----
 
-json macro_to_json(const Macro &m) {
-  json j;
-  j["values"] = m.values;
-  if (m.loop != 255) j["loop"] = m.loop;
-  if (m.release != 255) j["release"] = m.release;
-  if (m.speed != 1) j["speed"] = m.speed;
-  if (m.delay != 0) j["delay"] = m.delay;
+Json macro_to_json(const Macro &m) {
+  Json j = Json::object();
+  Json vals = Json::array();
+  for (auto v : m.values) vals.push_back(Json(static_cast<int64_t>(v)));
+  j["values"] = std::move(vals);
+  if (m.loop != 255) j["loop"] = Json(static_cast<int>(m.loop));
+  if (m.release != 255) j["release"] = Json(static_cast<int>(m.release));
+  if (m.speed != 1) j["speed"] = Json(static_cast<int>(m.speed));
+  if (m.delay != 0) j["delay"] = Json(static_cast<int>(m.delay));
   if (m.type != MacroType::Sequence)
-    j["type"] = static_cast<uint8_t>(m.type);
+    j["type"] = Json(static_cast<int>(static_cast<uint8_t>(m.type)));
   return j;
 }
 
-Macro macro_from_json(const json &j) {
+Macro macro_from_json(const Json &j) {
   Macro m;
-  m.values = j.at("values").get<std::vector<int32_t>>();
-  m.loop = j.contains("loop") ? j["loop"].get<uint8_t>() : 255;
-  m.release = j.contains("release") ? j["release"].get<uint8_t>() : 255;
-  m.speed = j.contains("speed") ? j["speed"].get<uint8_t>() : 1;
-  m.delay = j.contains("delay") ? j["delay"].get<uint8_t>() : 0;
+  m.values = j.at("values").get_int32_vec();
+  m.loop = j.contains("loop") ? j.at("loop").get_uint8() : 255;
+  m.release = j.contains("release") ? j.at("release").get_uint8() : 255;
+  m.speed = j.contains("speed") ? j.at("speed").get_uint8() : 1;
+  m.delay = j.contains("delay") ? j.at("delay").get_uint8() : 0;
   m.type = j.contains("type")
-      ? static_cast<MacroType>(j["type"].get<uint8_t>())
+      ? static_cast<MacroType>(j.at("type").get_uint8())
       : MacroType::Sequence;
   return m;
 }
 
-void write_macro_if(json &obj, const char *key, const Macro &m) {
+void write_macro_if(Json &obj, const char *key, const Macro &m) {
   if (!m.empty()) obj[key] = macro_to_json(m);
 }
 
-void read_macro_if(const json &obj, const char *key, Macro &m) {
+void read_macro_if(const Json &obj, const char *key, Macro &m) {
   if (obj.contains(key)) m = macro_from_json(obj.at(key));
 }
 
-json channel_macros_to_json(const ChannelMacros &cm) {
-  json j = json::object();
+Json channel_macros_to_json(const ChannelMacros &cm) {
+  Json j = Json::object();
   write_macro_if(j, "volume", cm.volume);
   write_macro_if(j, "arpeggio", cm.arpeggio);
   write_macro_if(j, "duty", cm.duty);
@@ -103,7 +105,7 @@ json channel_macros_to_json(const ChannelMacros &cm) {
   return j;
 }
 
-ChannelMacros channel_macros_from_json(const json &j) {
+ChannelMacros channel_macros_from_json(const Json &j) {
   ChannelMacros cm;
   read_macro_if(j, "volume", cm.volume);
   read_macro_if(j, "arpeggio", cm.arpeggio);
@@ -123,8 +125,8 @@ ChannelMacros channel_macros_from_json(const json &j) {
   return cm;
 }
 
-json op_macros_to_json(const OperatorMacros &om) {
-  json j = json::object();
+Json op_macros_to_json(const OperatorMacros &om) {
+  Json j = Json::object();
   write_macro_if(j, "tl", om.tl);
   write_macro_if(j, "ar", om.ar);
   write_macro_if(j, "dr", om.dr);
@@ -139,7 +141,7 @@ json op_macros_to_json(const OperatorMacros &om) {
   return j;
 }
 
-OperatorMacros op_macros_from_json(const json &j) {
+OperatorMacros op_macros_from_json(const Json &j) {
   OperatorMacros om;
   read_macro_if(j, "tl", om.tl);
   read_macro_if(j, "ar", om.ar);
@@ -162,41 +164,41 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
     return Error{"Empty data"};
 
   try {
-    auto j = json::parse(data, data + size);
+    auto j = Json::parse(data, size);
 
     Patch patch;
-    patch.name = j.at("name").get<std::string>();
+    patch.name = j.at("name").get_string();
 
     // Device / global
-    auto &dev = j.at("device");
-    patch.dac_enable = dev.at("dac_enable").get<bool>();
-    patch.lfo_enable = dev.at("lfo_enable").get<bool>();
-    patch.lfo_frequency = dev.at("lfo_frequency").get<uint8_t>();
+    const auto &dev = j.at("device");
+    patch.dac_enable = dev.at("dac_enable").get_bool();
+    patch.lfo_enable = dev.at("lfo_enable").get_bool();
+    patch.lfo_frequency = dev.at("lfo_frequency").get_uint8();
 
     // Channel
-    auto &ch = j.at("channel");
-    patch.left = ch.at("left_speaker").get<bool>();
-    patch.right = ch.at("right_speaker").get<bool>();
+    const auto &ch = j.at("channel");
+    patch.left = ch.at("left_speaker").get_bool();
+    patch.right = ch.at("right_speaker").get_bool();
     patch.ams =
-        ch.at("amplitude_modulation_sensitivity").get<uint8_t>();
+        ch.at("amplitude_modulation_sensitivity").get_uint8();
     patch.fms =
-        ch.at("frequency_modulation_sensitivity").get<uint8_t>();
+        ch.at("frequency_modulation_sensitivity").get_uint8();
 
     // Instrument
-    auto &inst = j.at("instrument");
-    patch.feedback = inst.at("feedback").get<uint8_t>();
-    patch.algorithm = inst.at("algorithm").get<uint8_t>();
-    auto &ops = inst.at("operators");
+    const auto &inst = j.at("instrument");
+    patch.feedback = inst.at("feedback").get_uint8();
+    patch.algorithm = inst.at("algorithm").get_uint8();
+    const auto &ops = inst.at("operators");
     for (size_t i = 0; i < 4; ++i)
       patch.operators[i] = op_from_json(ops[i]);
 
     // Macros (optional — missing = no macros, backward compatible)
     if (j.contains("macros")) {
-      auto &mc = j.at("macros");
+      const auto &mc = j.at("macros");
       if (mc.contains("channel"))
         patch.macros = channel_macros_from_json(mc.at("channel"));
       if (mc.contains("operators")) {
-        auto &ops_macros = mc.at("operators");
+        const auto &ops_macros = mc.at("operators");
         for (size_t i = 0; i < 4 && i < ops_macros.size(); ++i)
           patch.operator_macros[i] = op_macros_from_json(ops_macros[i]);
       }
@@ -213,30 +215,35 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
 
 SerializeResult serialize(const Patch &patch) {
   try {
-    json ops = json::array();
+    Json ops = Json::array();
     for (const auto &op : patch.operators)
       ops.push_back(op_to_json(op));
 
-    json j = {
-        {"name", patch.name},
-        {"device",
-         {{"dac_enable", patch.dac_enable},
-          {"lfo_enable", patch.lfo_enable},
-          {"lfo_frequency", patch.lfo_frequency}}},
-        {"channel",
-         {{"left_speaker", patch.left},
-          {"right_speaker", patch.right},
-          {"amplitude_modulation_sensitivity", patch.ams},
-          {"frequency_modulation_sensitivity", patch.fms}}},
-        {"instrument",
-         {{"feedback", patch.feedback},
-          {"algorithm", patch.algorithm},
-          {"operators", ops}}},
-    };
+    Json inst = Json::object();
+    inst["feedback"] = Json(static_cast<int>(patch.feedback));
+    inst["algorithm"] = Json(static_cast<int>(patch.algorithm));
+    inst["operators"] = std::move(ops);
+
+    Json dev = Json::object();
+    dev["dac_enable"] = Json(patch.dac_enable);
+    dev["lfo_enable"] = Json(patch.lfo_enable);
+    dev["lfo_frequency"] = Json(static_cast<int>(patch.lfo_frequency));
+
+    Json ch = Json::object();
+    ch["left_speaker"] = Json(patch.left);
+    ch["right_speaker"] = Json(patch.right);
+    ch["amplitude_modulation_sensitivity"] = Json(static_cast<int>(patch.ams));
+    ch["frequency_modulation_sensitivity"] = Json(static_cast<int>(patch.fms));
+
+    Json j = Json::object();
+    j["name"] = Json(patch.name);
+    j["device"] = std::move(dev);
+    j["channel"] = std::move(ch);
+    j["instrument"] = std::move(inst);
 
     // Macros (only written when present, backward compatible)
     if (patch.has_macros()) {
-      json macros = json::object();
+      Json macros = Json::object();
 
       auto ch_json = channel_macros_to_json(patch.macros);
       if (!ch_json.empty())
@@ -248,7 +255,7 @@ SerializeResult serialize(const Patch &patch) {
         if (!om.empty()) { any_op_macros = true; break; }
       }
       if (any_op_macros) {
-        json ops_arr = json::array();
+        Json ops_arr = Json::array();
         for (const auto &om : patch.operator_macros)
           ops_arr.push_back(op_macros_to_json(om));
         macros["operators"] = std::move(ops_arr);

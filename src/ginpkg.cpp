@@ -1,9 +1,9 @@
 #include "ym2612_format/ginpkg.hpp"
 
 #include "ym2612_format/gin.hpp"
+#include "json_minimal.hpp"
 #include <algorithm>
 #include <miniz.h>
-#include <nlohmann/json.hpp>
 #include <string>
 #include <vector>
 
@@ -14,6 +14,8 @@ FormatInfo info() {
 }
 
 namespace {
+
+using Json = json_minimal::Value;
 
 struct ZipGuard {
   mz_zip_archive *a;
@@ -70,23 +72,23 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
   auto history_data = read_entry(archive, "history.json");
   if (history_data) {
     try {
-      auto j = nlohmann::json::parse(*history_data);
+      auto j = Json::parse(*history_data);
 
       // Current timestamp
-      if (j.contains("current") && j["current"].is_object()) {
-        auto &cur = j["current"];
-        if (cur.contains("timestamp") && cur["timestamp"].is_string())
-          current_timestamp = cur["timestamp"].get<std::string>();
+      if (j.contains("current") && j.at("current").is_object()) {
+        const auto &cur = j.at("current");
+        if (cur.contains("timestamp") && cur.at("timestamp").is_string())
+          current_timestamp = cur.at("timestamp").get_string();
       }
 
       // Version entries
-      if (j.contains("versions") && j["versions"].is_array()) {
-        for (const auto &v : j["versions"]) {
+      if (j.contains("versions") && j.at("versions").is_array()) {
+        for (const auto &v : j.at("versions")) {
           std::string uuid, ts;
-          if (v.contains("uuid") && v["uuid"].is_string())
-            uuid = v["uuid"].get<std::string>();
-          if (v.contains("timestamp") && v["timestamp"].is_string())
-            ts = v["timestamp"].get<std::string>();
+          if (v.contains("uuid") && v.at("uuid").is_string())
+            uuid = v.at("uuid").get_string();
+          if (v.contains("timestamp") && v.at("timestamp").is_string())
+            ts = v.at("timestamp").get_string();
           if (!uuid.empty() && !ts.empty())
             history.push_back({uuid, ts});
         }

@@ -12,11 +12,6 @@ option(YM2612_FORMAT_BUILD_TESTS "Build tests" OFF)
 # --- Dependencies ---
 include(FetchContent)
 
-FetchContent_Declare(
-  json
-  URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
-)
-
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
 FetchContent_Declare(
@@ -25,7 +20,17 @@ FetchContent_Declare(
   GIT_TAG 3.1.1
 )
 
-FetchContent_MakeAvailable(json miniz)
+FetchContent_MakeAvailable(miniz)
+
+# nlohmann/json is only needed by the CLI tool (info --json output).
+# The library itself uses a lightweight internal JSON implementation.
+if(YM2612_FORMAT_BUILD_CLI)
+  FetchContent_Declare(
+    json
+    URL https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz
+  )
+  FetchContent_MakeAvailable(json)
+endif()
 
 # --- Library ---
 add_library(ym2612_format STATIC
@@ -45,12 +50,16 @@ target_include_directories(ym2612_format PUBLIC
   $<INSTALL_INTERFACE:include>
 )
 
-target_link_libraries(ym2612_format PUBLIC nlohmann_json::nlohmann_json miniz)
+target_include_directories(ym2612_format PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_link_libraries(ym2612_format PUBLIC miniz)
 
 # --- CLI ---
 if(YM2612_FORMAT_BUILD_CLI)
   add_executable(ym2612_convert src/cli/main.cpp)
-  target_link_libraries(ym2612_convert PRIVATE ym2612_format)
+  target_link_libraries(ym2612_convert PRIVATE ym2612_format nlohmann_json::nlohmann_json)
 endif()
 
 # --- Tests ---
