@@ -9,6 +9,7 @@
 #include "ym2612_format/ginpkg.hpp"
 #include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
+#include "ym2612_format/tfi.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -31,6 +32,7 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"mml", Format::Mml},
       {"fur", Format::Fur},
       {"opm", Format::Opm},
+      {"tfi", Format::Tfi},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -49,6 +51,7 @@ const char *format_to_extension(Format f) {
   case Format::Mml:     return "mml";
   case Format::Fur:     return "fur";
   case Format::Opm:     return "opm";
+  case Format::Tfi:     return "tfi";
   }
   return "";
 }
@@ -98,6 +101,8 @@ const std::vector<FormatEntry> &formats() {
        fur::parse, nullptr, nullptr},
       {make_info(Format::Opm, "VOPM/MiOPMdrv", "opm", true, false, true),
        opm::parse, nullptr, nullptr},
+      {make_info(Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true),
+       tfi::parse, tfi::serialize, nullptr},
   };
   return entries;
 }

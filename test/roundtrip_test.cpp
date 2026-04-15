@@ -1656,6 +1656,198 @@ bool test_opm_parse_via_high_level() {
   return true;
 }
 
+// ---- TFI parse/serialize tests ----
+
+bool test_tfi_parse_synthesized() {
+  // Synthesized 42-byte TFI covering every field, including SSG-EG
+  // enabled on OP2 and full detune range across ops.
+  const uint8_t bytes[42] = {
+      0x05, 0x06,                                         // alg=5, fb=6
+      // OP0: MUL=3, DT=0(-3), TL=32, RS=2, AR=31, DR=10, SR=5, RR=8, SL=4, SSG=0
+      0x03, 0x00, 0x20, 0x02, 0x1F, 0x0A, 0x05, 0x08, 0x04, 0x00,
+      // OP1: MUL=7, DT=3(0),  TL=0,  RS=0, AR=28, DR=0,  SR=0, RR=6, SL=0, SSG=0
+      0x07, 0x03, 0x00, 0x00, 0x1C, 0x00, 0x00, 0x06, 0x00, 0x00,
+      // OP2: MUL=1, DT=6(+3), TL=14, RS=1, AR=30, DR=4,  SR=2, RR=7, SL=2, SSG=0x0C (enable, mode 4)
+      0x01, 0x06, 0x0E, 0x01, 0x1E, 0x04, 0x02, 0x07, 0x02, 0x0C,
+      // OP3: MUL=0, DT=4(+1), TL=100, RS=3, AR=15, DR=12, SR=3, RR=5, SL=9, SSG=0
+      0x00, 0x04, 0x64, 0x03, 0x0F, 0x0C, 0x03, 0x05, 0x09, 0x00,
+  };
+
+  auto result = tfi::parse(bytes, sizeof(bytes), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 5);
+  ASSERT_EQ(p.feedback, 6);
+  // TFI-unrepresentable fields default to the "no-op" state.
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_TRUE(p.left && p.right);
+
+  // OP0
+  ASSERT_EQ(p.operators[0].ml, 3);
+  ASSERT_EQ(p.operators[0].dt, detune_from_linear(0)); // -3 in hw encoding
+  ASSERT_EQ(p.operators[0].tl, 32);
+  ASSERT_EQ(p.operators[0].ks, 2);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_EQ(p.operators[0].dr, 10);
+  ASSERT_EQ(p.operators[0].sr, 5);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_EQ(p.operators[0].sl, 4);
+  ASSERT_TRUE(!p.operators[0].ssg_enable);
+  ASSERT_TRUE(!p.operators[0].am); // TFI has no AM-EN
+
+  // OP2: SSG-EG 0x0C = enabled, mode 4
+  ASSERT_TRUE(p.operators[2].ssg_enable);
+  ASSERT_EQ(p.operators[2].ssg, 4);
+  ASSERT_EQ(p.operators[2].dt, detune_from_linear(6)); // +3
+
+  // OP3: detune +1
+  ASSERT_EQ(p.operators[3].dt, detune_from_linear(4));
+  ASSERT_EQ(p.operators[3].tl, 100);
+  return true;
+}
+
+bool test_tfi_roundtrip_synthesized() {
+  // Build a Patch with every TFI-representable field set, serialize,
+  // parse back, compare field-by-field.
+  Patch original;
+  original.algorithm = 3;
+  original.feedback = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (i * 3 + 1) & 0x0F;
+    // Use all four corners of detune encoding: -3, 0, +3, and the
+    // duplicate 0 (register 4) which should canonicalize via
+    // detune_to_linear → detune_from_linear.
+    static const uint8_t dt_hw[] = {7, 0, 3, 5}; // -3, 0, +3, -1
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(i * 17);
+    o.ks = static_cast<uint8_t>(i & 0x03);
+    o.ar = static_cast<uint8_t>(31 - i);
+    o.dr = static_cast<uint8_t>(i * 2);
+    o.sr = static_cast<uint8_t>(i + 3);
+    o.rr = static_cast<uint8_t>(i + 1);
+    o.sl = static_cast<uint8_t>(15 - i);
+    o.ssg_enable = (i == 2);
+    o.ssg = (i == 2) ? 5 : 0;
+    o.enable = true;
+  }
+
+  auto ser = tfi::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(42));
+
+  auto parsed = tfi::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  ASSERT_EQ(p.algorithm, original.algorithm);
+  ASSERT_EQ(p.feedback, original.feedback);
+  for (int i = 0; i < 4; ++i) {
+    const auto &oa = original.operators[i];
+    const auto &ob = p.operators[i];
+    ASSERT_EQ(ob.ml, oa.ml);
+    // Detune round-trip: register 4 (-0) canonicalizes to 0 (+0) through
+    // the linear encoding, since TFI cannot distinguish the two.  For
+    // other values the hardware encoding must survive.
+    uint8_t expected_dt = detune_from_linear(detune_to_linear(oa.dt));
+    ASSERT_EQ(ob.dt, expected_dt);
+    ASSERT_EQ(ob.tl, oa.tl);
+    ASSERT_EQ(ob.ks, oa.ks);
+    ASSERT_EQ(ob.ar, oa.ar);
+    ASSERT_EQ(ob.dr, oa.dr);
+    ASSERT_EQ(ob.sr, oa.sr);
+    ASSERT_EQ(ob.rr, oa.rr);
+    ASSERT_EQ(ob.sl, oa.sl);
+    ASSERT_EQ(ob.ssg_enable, oa.ssg_enable);
+    ASSERT_EQ(ob.ssg, oa.ssg);
+  }
+  return true;
+}
+
+bool test_tfi_parse_real_file() {
+  // Strings.tfi from the VGMrips Instruments Bank.  Verifies the parser
+  // accepts a real-world TFI and decodes the header + OP0 as expected
+  // (bytes were manually checked against the hex dump).
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "sample_strings.tfi");
+  ASSERT_TRUE(bytes.size() == 42);
+
+  auto result = tfi::parse(bytes.data(), bytes.size(), "Strings");
+  ASSERT_TRUE(is_ok(result));
+  const auto &p = get_ok(result).patches[0];
+
+  ASSERT_TRUE(p.name == "Strings");
+  ASSERT_EQ(p.algorithm, 2);
+  ASSERT_EQ(p.feedback, 7);
+  // OP0: MUL=2, DT=6(+3), TL=27, RS=2, AR=15, DR=9, SR=0, RR=5, SL=1.
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].dt, detune_from_linear(6));
+  ASSERT_EQ(p.operators[0].tl, 27);
+  ASSERT_EQ(p.operators[0].ks, 2);
+  ASSERT_EQ(p.operators[0].ar, 15);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].rr, 5);
+  ASSERT_EQ(p.operators[0].sl, 1);
+  // OP3: DT=0 (-3).
+  ASSERT_EQ(p.operators[3].dt, detune_from_linear(0));
+  return true;
+}
+
+bool test_tfi_sniff_rejects_non_tfi() {
+  // Wrong size — reject.
+  std::vector<uint8_t> too_small(41, 0);
+  ASSERT_TRUE(!is_ok(tfi::parse(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(43, 0);
+  ASSERT_TRUE(!is_ok(tfi::parse(too_big.data(), too_big.size())));
+
+  // Right size, but algorithm out of range.
+  std::vector<uint8_t> bad(42, 0);
+  bad[0] = 8; // algorithm > 7
+  ASSERT_TRUE(!is_ok(tfi::parse(bad.data(), bad.size())));
+
+  // Right size, but an operator detune is out of hardware range (8 > 7).
+  std::vector<uint8_t> bad_detune(42, 0);
+  bad_detune[2 + 1] = 8; // OP0 detune = 8
+  ASSERT_TRUE(!is_ok(tfi::parse(bad_detune.data(), bad_detune.size())));
+
+  // Right size, but an operator TL exceeds 7-bit range.
+  std::vector<uint8_t> bad_tl(42, 0);
+  bad_tl[2 + 2] = 0x80;
+  ASSERT_TRUE(!is_ok(tfi::parse(bad_tl.data(), bad_tl.size())));
+  return true;
+}
+
+bool test_tfi_via_high_level() {
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "sample_strings.tfi");
+  ASSERT_TRUE(bytes.size() == 42);
+
+  // Extension and Format enum round-trip.
+  auto f = format_from_string("tfi");
+  ASSERT_TRUE(f.has_value() && *f == Format::Tfi);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Tfi)) == "tfi");
+
+  // High-level parse with explicit hint.
+  auto result = parse(bytes.data(), bytes.size(), Format::Tfi, "Strings");
+  ASSERT_TRUE(is_ok(result));
+
+  // Auto-detect (no hint) should also pick up TFI.
+  auto auto_result = parse(bytes.data(), bytes.size());
+  ASSERT_TRUE(is_ok(auto_result));
+
+  // High-level serialize.
+  Patch p = get_ok(result).patches[0];
+  auto ser = serialize(Format::Tfi, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(42));
+  return true;
+}
+
 // ---- Main ----
 
 int main() {
@@ -1718,6 +1910,13 @@ int main() {
   RUN_TEST(test_opm_parse_warnings);
   RUN_TEST(test_opm_parse_lfo_depth_gating);
   RUN_TEST(test_opm_parse_via_high_level);
+
+  std::cout << "\n=== TFI parse/serialize ===\n";
+  RUN_TEST(test_tfi_parse_synthesized);
+  RUN_TEST(test_tfi_roundtrip_synthesized);
+  RUN_TEST(test_tfi_parse_real_file);
+  RUN_TEST(test_tfi_sniff_rejects_non_tfi);
+  RUN_TEST(test_tfi_via_high_level);
 
   std::cout << "\n=== High-level API ===\n";
   RUN_TEST(test_converter_parse_serialize);

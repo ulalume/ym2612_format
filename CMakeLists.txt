@@ -43,6 +43,7 @@ add_library(ym2612_format STATIC
   src/rym2612.cpp
   src/ctrmml.cpp
   src/opm.cpp
+  src/tfi.cpp
   src/converter.cpp
 )
 

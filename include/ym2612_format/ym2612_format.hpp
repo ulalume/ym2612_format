@@ -15,3 +15,4 @@
 #include "patch.hpp"
 #include "result.hpp"
 #include "rym2612.hpp"
+#include "tfi.hpp"

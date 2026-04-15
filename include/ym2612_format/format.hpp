@@ -18,6 +18,7 @@ enum class Format {
   Mml,     ///< ctrmml MML (.mml)
   Fur,     ///< Furnace Module (.fur) — read-only, extracts FM instruments
   Opm,     ///< VOPM / MiOPMdrv (.opm) — read-only, OPM→OPN2 best-effort
+  Tfi,     ///< TFM Music Maker / VGMrips (.tfi) — 42-byte YM2612 FM patch
 };
 
 /// Convert a string (extension with or without dot) to a Format.
