@@ -14,8 +14,11 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 | `.mml`     | ctrmml (MML)       |  o   |   o   |        | Pitch macro output as `@M`     |
 | `.gin`     | GIN (JSON)         |  o   |   o   |   o    |                                |
 | `.ginpkg`  | GINPKG (ZIP)       |  o   |       |        | Extracts all versions          |
+| `.opm`     | VOPM / MiOPMdrv    |  o   |       |        | OPM → OPN2; DT2/AMD/PMD/WF/NE/SLOT dropped |
 
 Instrument macros (volume, arpeggio, pitch, per-operator TL/AR, etc.) are read/written in FUI, FUR, and GIN. MML export includes pitch macros as commented `@M` definitions.
+
+`.opm` is a YM2151 (OPM) instrument format. On import AR/D1R/D2R/RR/D1L/TL/KS/MUL/DT1/AMS-EN and the channel FL/CON map directly to YM2612 registers. LFO LFRQ is approximated onto the OPN2 `lfo_frequency` table (OPM 0–255 → OPN2 0–7); the two chips use different LFO clocks so absolute rates differ. OPM AMD / PMD have no OPN2 counterpart and are discarded, but they gate the per-channel AMS / PMS: if AMD=0 the OPN2 AMS is forced to 0 (and likewise PMS for PMD=0), because copying OPM's sensitivity without its depth register would introduce modulation that wasn't in the source patch. DT2, LFO WF, NE and the SLOT mask are discarded with warnings.
 
 ## Build
 

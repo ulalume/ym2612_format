@@ -11,6 +11,7 @@
 #include "fur.hpp"
 #include "gin.hpp"
 #include "ginpkg.hpp"
+#include "opm.hpp"
 #include "patch.hpp"
 #include "result.hpp"
 #include "rym2612.hpp"

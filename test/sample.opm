@@ -1,0 +1,21 @@
+//MiOPMdrv sound bank Paramer Ver2002.04.22
+//LFO: LFRQ AMD PMD WF NFRQ
+//@:[Num] [Name]
+//CH: PAN	FL CON AMS PMS SLOT NE
+//[OPname]: AR D1R D2R	RR D1L	TL	KS MUL DT1 DT2 AMS-EN
+
+@:0 Test Instrument
+LFO: 0 0 0 0 0
+CH: 64 5 4 0 0 120 0
+M1: 31 0 0 5 2 0 0 15 3 0 0
+C1: 31 17 16 8 2 17 0 15 3 0 0
+M2: 31 31 12 8 1 8 0 15 3 0 0
+C2: 29 18 20 10 3 16 0 15 3 0 0
+
+@:1 Warnings Test
+LFO: 10 20 30 1 0
+CH: 192 7 3 2 5 120 1
+M1: 20 10 5 8 4 40 1 7 2 3 1
+C1: 25 12 6 9 5 20 2 8 3 0 0
+M2: 22 11 7 10 6 30 3 9 4 2 1
+C2: 28 15 8 12 7 0 0 10 5 0 1

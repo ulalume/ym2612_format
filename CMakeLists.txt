@@ -42,6 +42,7 @@ add_library(ym2612_format STATIC
   src/ginpkg.cpp
   src/rym2612.cpp
   src/ctrmml.cpp
+  src/opm.cpp
   src/converter.cpp
 )
 

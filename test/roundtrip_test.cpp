@@ -1515,6 +1515,147 @@ bool test_converter_parse_serialize() {
   return true;
 }
 
+// ---- OPM parse tests ----
+
+bool test_opm_parse_basic() {
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "sample.opm");
+  ASSERT_TRUE(!bytes.empty());
+
+  auto result = opm::parse(bytes.data(), bytes.size(), "sample");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(2));
+
+  const auto &p0 = ok.patches[0];
+  ASSERT_TRUE(p0.name == "Test Instrument");
+  ASSERT_EQ(p0.algorithm, 4);
+  ASSERT_EQ(p0.feedback, 5);
+  ASSERT_EQ(p0.ams, 0);
+  ASSERT_EQ(p0.fms, 0);
+
+  // M1 → op[0]: 31 0 0 5 2 0 0 15 3
+  ASSERT_EQ(p0.operators[0].ar, 31);
+  ASSERT_EQ(p0.operators[0].dr, 0);
+  ASSERT_EQ(p0.operators[0].rr, 5);
+  ASSERT_EQ(p0.operators[0].sl, 2);
+  ASSERT_EQ(p0.operators[0].tl, 0);
+  ASSERT_EQ(p0.operators[0].ml, 15);
+  ASSERT_EQ(p0.operators[0].dt, 3);
+
+  // C2 → op[3]: 29 18 20 10 3 16 0 15 3
+  ASSERT_EQ(p0.operators[3].ar, 29);
+  ASSERT_EQ(p0.operators[3].dr, 18);
+  ASSERT_EQ(p0.operators[3].sr, 20);
+  ASSERT_EQ(p0.operators[3].rr, 10);
+  ASSERT_EQ(p0.operators[3].sl, 3);
+  ASSERT_EQ(p0.operators[3].tl, 16);
+  ASSERT_EQ(p0.operators[3].ml, 15);
+  ASSERT_EQ(p0.operators[3].dt, 3);
+
+  // Patch 0: LFO line is all zeros and AMD/PMD=0 → LFO stays off on OPN2,
+  // and AMS/FMS are zero (the CH line also had them as 0 here).
+  ASSERT_TRUE(!p0.lfo_enable);
+  ASSERT_EQ(p0.lfo_frequency, 0);
+
+  return true;
+}
+
+bool test_opm_parse_warnings() {
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "sample.opm");
+  ASSERT_TRUE(!bytes.empty());
+
+  auto result = opm::parse(bytes.data(), bytes.size(), "sample");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+
+  // The second instrument exercises LFO + DT2 + NE non-zero.
+  bool saw_lfo = false, saw_dt2 = false, saw_ne = false;
+  for (const auto &w : ok.warnings) {
+    if (w.find("LFO") != std::string::npos) saw_lfo = true;
+    if (w.find("DT2") != std::string::npos) saw_dt2 = true;
+    if (w.find("NE") != std::string::npos) saw_ne = true;
+  }
+  ASSERT_TRUE(saw_lfo);
+  ASSERT_TRUE(saw_dt2);
+  ASSERT_TRUE(saw_ne);
+
+  // Second instrument: PAN 192 → both channels, AMS-EN propagates to op.am.
+  const auto &p1 = ok.patches[1];
+  ASSERT_TRUE(p1.left);
+  ASSERT_TRUE(p1.right);
+  ASSERT_EQ(p1.ams, 2);
+  ASSERT_EQ(p1.fms, 5);
+  ASSERT_EQ(p1.algorithm, 3);
+  ASSERT_EQ(p1.feedback, 7);
+  ASSERT_TRUE(p1.operators[0].am); // M1 AMS-EN = 1 → op[0]
+  ASSERT_TRUE(!p1.operators[2].am); // C1 AMS-EN = 0 → op[2]
+  ASSERT_TRUE(p1.operators[1].am); // M2 AMS-EN = 1 → op[1]
+  ASSERT_TRUE(p1.operators[3].am); // C2 AMS-EN = 1 → op[3]
+
+  // Patch 1: LFO 10 20 30 1 0 → LFRQ=10 with AMD/PMD non-zero, so OPN2
+  // LFO must be enabled.  lfo_frequency approximated as LFRQ>>5 = 0.
+  ASSERT_TRUE(p1.lfo_enable);
+  ASSERT_EQ(p1.lfo_frequency, 0);
+  return true;
+}
+
+bool test_opm_parse_lfo_depth_gating() {
+  // OPM's channel AMS/PMS only produce audible modulation when the LFO
+  // global depth (AMD/PMD) is non-zero.  OPN2 has no AMD/PMD, so we must
+  // zero AMS/PMS on import when the OPM depth was zero, to avoid adding
+  // modulation that wasn't in the original patch.
+  const char *src =
+      "//MiOPMdrv sound bank Paramer Ver2002.04.22\n"
+      "@:0 DepthGating\n"
+      "LFO: 200 0 0 2 0\n"          // LFRQ non-zero, AMD=PMD=0
+      "CH: 192 3 4 3 7 120 0\n"     // AMS=3, PMS=7 (would be huge if copied)
+      "M1: 31 0 0 5 2 0 0 15 3 0 1\n"
+      "C1: 31 0 0 5 2 0 0 15 3 0 0\n"
+      "M2: 31 0 0 5 2 0 0 15 3 0 0\n"
+      "C2: 31 0 0 5 2 0 0 15 3 0 0\n";
+  auto result = opm::parse(reinterpret_cast<const uint8_t *>(src),
+                           std::strlen(src), "gating");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+  const auto &p = ok.patches[0];
+
+  // AMD=0 → OPN2 AMS must be zeroed even though OPM AMS=3.
+  ASSERT_EQ(p.ams, 0);
+  // PMD=0 → OPN2 FMS must be zeroed even though OPM PMS=7.
+  ASSERT_EQ(p.fms, 0);
+
+  // LFRQ=200 (>> 5 = 6) → OPN2 lfo_frequency = 6.  LFO itself stays
+  // enabled because LFRQ is non-zero (the patch designer set an LFO rate).
+  ASSERT_TRUE(p.lfo_enable);
+  ASSERT_EQ(p.lfo_frequency, 6);
+
+  // AMS-EN on M1 still propagates to op[0].am regardless of gating.
+  ASSERT_TRUE(p.operators[0].am);
+  return true;
+}
+
+bool test_opm_parse_via_high_level() {
+  auto bytes = read_file(fs::path(TEST_DATA_DIR) / "sample.opm");
+  ASSERT_TRUE(!bytes.empty());
+
+  auto result = parse(bytes.data(), bytes.size(), Format::Opm, "sample");
+  ASSERT_TRUE(is_ok(result));
+  ASSERT_EQ(get_ok(result).patches.size(), static_cast<size_t>(2));
+
+  // Format enum round-trips via extension string.
+  auto f = format_from_string("opm");
+  ASSERT_TRUE(f.has_value());
+  ASSERT_TRUE(*f == Format::Opm);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Opm)) == "opm");
+
+  // Write path should be rejected.
+  Patch dummy;
+  auto ser = serialize(Format::Opm, dummy);
+  ASSERT_TRUE(!is_ok(ser));
+  return true;
+}
+
 // ---- Main ----
 
 int main() {
@@ -1571,6 +1712,12 @@ int main() {
   RUN_TEST(test_mml_serialize_text_lfo_pan);
   RUN_TEST(test_mml_format_semitones_edge_cases);
   RUN_TEST(test_mml_parse_multiple_patches);
+
+  std::cout << "\n=== OPM parse ===\n";
+  RUN_TEST(test_opm_parse_basic);
+  RUN_TEST(test_opm_parse_warnings);
+  RUN_TEST(test_opm_parse_lfo_depth_gating);
+  RUN_TEST(test_opm_parse_via_high_level);
 
   std::cout << "\n=== High-level API ===\n";
   RUN_TEST(test_converter_parse_serialize);

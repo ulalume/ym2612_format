@@ -7,6 +7,7 @@
 #include "ym2612_format/fur.hpp"
 #include "ym2612_format/gin.hpp"
 #include "ym2612_format/ginpkg.hpp"
+#include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
 
 #include <algorithm>
@@ -29,6 +30,7 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"ginpkg", Format::Ginpkg}, {"rym2612", Format::Rym2612},
       {"mml", Format::Mml},
       {"fur", Format::Fur},
+      {"opm", Format::Opm},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -46,6 +48,7 @@ const char *format_to_extension(Format f) {
   case Format::Rym2612: return "rym2612";
   case Format::Mml:     return "mml";
   case Format::Fur:     return "fur";
+  case Format::Opm:     return "opm";
   }
   return "";
 }
@@ -93,6 +96,8 @@ const std::vector<FormatEntry> &formats() {
        ctrmml::parse, ctrmml_serialize_wrapper, ctrmml_serialize_text_wrapper},
       {make_info(Format::Fur, "Furnace Module", "fur", true, false),
        fur::parse, nullptr, nullptr},
+      {make_info(Format::Opm, "VOPM/MiOPMdrv", "opm", true, false, true),
+       opm::parse, nullptr, nullptr},
   };
   return entries;
 }

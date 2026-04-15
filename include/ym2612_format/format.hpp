@@ -17,6 +17,7 @@ enum class Format {
   Rym2612, ///< RYM2612 Preset (.rym2612)
   Mml,     ///< ctrmml MML (.mml)
   Fur,     ///< Furnace Module (.fur) — read-only, extracts FM instruments
+  Opm,     ///< VOPM / MiOPMdrv (.opm) — read-only, OPM→OPN2 best-effort
 };
 
 /// Convert a string (extension with or without dot) to a Format.
