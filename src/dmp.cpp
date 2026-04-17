@@ -16,6 +16,15 @@ uint8_t safe_read(const uint8_t *data, size_t size, size_t index) {
   return index < size ? data[index] : 0;
 }
 
+// DMP on-disk operator layout is slot-register order (bytes map to register
+// offsets 0/4/8/12).  Patch::operators[] is algorithm order (OP1..OP4 as in
+// the Yamaha algorithm diagrams), so disk indices 1 and 2 need to cross over:
+//   disk 0 → alg OP1   (register offset 0)
+//   disk 1 → alg OP3   (register offset 4)
+//   disk 2 → alg OP2   (register offset 8)
+//   disk 3 → alg OP4   (register offset 12)
+constexpr int kDiskToAlg[4] = {0, 2, 1, 3};
+
 } // namespace
 
 ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
@@ -120,7 +129,7 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
   patch.feedback = feedback_val & 0x07;
 
   for (int op = 0; op < 4; ++op) {
-    auto &o = patch.operators[op];
+    auto &o = patch.operators[kDiskToAlg[op]];
     const size_t base = header_size + op * operator_bytes;
 
     uint8_t mult = safe_read(bytes.data(), bytes.size(), base + 0);
@@ -165,7 +174,7 @@ SerializeResult serialize(const Patch &patch) {
   data.push_back(patch.ams & 0x03);
 
   for (int i = 0; i < 4; ++i) {
-    const auto &op = patch.operators[i];
+    const auto &op = patch.operators[kDiskToAlg[i]];
     data.push_back(op.ml & 0x0F);
     data.push_back(std::min<uint8_t>(op.tl, 127));
     data.push_back(std::min<uint8_t>(op.ar, 31));

@@ -118,6 +118,13 @@ struct Patch {
   // Instrument (static parameters)
   uint8_t algorithm = 0; ///< Algorithm (0-7)
   uint8_t feedback = 0;  ///< Feedback (0-7)
+  /// Operators in **algorithm order**: operators[0..3] correspond to OP1..OP4
+  /// as drawn in Yamaha YM2612 algorithm diagrams — i.e. what the user sees
+  /// as "OP1" in DefleMask / TFM Maker / Furnace / etc.  Parsers are
+  /// responsible for remapping when an on-disk format stores in a different
+  /// order (e.g. DMP / DMF / RYM2612 / CTRMML use slot-register order on
+  /// disk and remap to algorithm order here).  The YM2612 register offsets
+  /// are 0, 8, 4, 12 for operators[0..3] respectively.
   std::array<Operator, 4> operators{};
 
   // Macro data (empty by default — formats that lack macros leave these empty)

@@ -226,8 +226,11 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
       }
       patch.ams = r.u8() & 0x03;
 
+      // DMF operator layout mirrors DMP's slot-register order on disk; remap
+      // to Patch::operators[]'s algorithm order.
+      constexpr int kDmfDiskToAlg[4] = {0, 2, 1, 3};
       for (int op = 0; op < 4; ++op) {
-        auto &o = patch.operators[op];
+        auto &o = patch.operators[kDmfDiskToAlg[op]];
 
         uint8_t am_val = r.u8();
         uint8_t ar = r.u8();

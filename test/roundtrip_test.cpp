@@ -204,14 +204,14 @@ bool test_dmp_parse_bright_piano() {
   ASSERT_EQ(p.operators[0].dt, 1); // linear 4 → hardware +1
   ASSERT_EQ(p.operators[0].sr, 6);
 
-  // OP2: DT_linear=2 → hw5 (-1)
-  ASSERT_EQ(p.operators[1].dt, 5);
-  ASSERT_EQ(p.operators[1].ml, 3);
-  ASSERT_EQ(p.operators[1].tl, 34);
+  // OP2 (alg) = disk slot 2: DT_linear=5 → hw2 (+2), ML=5
+  ASSERT_EQ(p.operators[1].dt, 2);
+  ASSERT_EQ(p.operators[1].ml, 5);
 
-  // OP3: DT_linear=5 → hw2 (+2)
-  ASSERT_EQ(p.operators[2].dt, 2);
-  ASSERT_EQ(p.operators[2].ml, 5);
+  // OP3 (alg) = disk slot 1: DT_linear=2 → hw5 (-1), ML=3, TL=34
+  ASSERT_EQ(p.operators[2].dt, 5);
+  ASSERT_EQ(p.operators[2].ml, 3);
+  ASSERT_EQ(p.operators[2].tl, 34);
 
   // OP4: DT_linear=3 → hw4 (0)
   ASSERT_EQ(p.operators[3].dt, 4);
@@ -231,14 +231,12 @@ bool test_dmp_parse_organ() {
   ASSERT_EQ(p.algorithm, 7);
   ASSERT_EQ(p.feedback, 4);
 
-  // OP1 DT_linear=6 → hw3 (+3)
-  ASSERT_EQ(p.operators[0].dt, 3);
-  // OP2 DT_linear=4 → hw1 (+1)
-  ASSERT_EQ(p.operators[1].dt, 1);
-  // OP3 DT_linear=5 → hw2 (+2)
-  ASSERT_EQ(p.operators[2].dt, 2);
-  // OP4 DT_linear=3 → hw4 (0)
-  ASSERT_EQ(p.operators[3].dt, 4);
+  // Disk DT bytes (linear): 6, 4, 5, 3  →  hw:  3, 1, 2, 4
+  // algorithm-order after remap (disk→alg [0,2,1,3]): 3, 2, 1, 4
+  ASSERT_EQ(p.operators[0].dt, 3); // disk0 → OP1
+  ASSERT_EQ(p.operators[1].dt, 2); // disk2 → OP2
+  ASSERT_EQ(p.operators[2].dt, 1); // disk1 → OP3
+  ASSERT_EQ(p.operators[3].dt, 4); // disk3 → OP4
 
   return true;
 }
@@ -254,11 +252,12 @@ bool test_dmp_parse_acoustic_bass() {
   ASSERT_EQ(p.algorithm, 1);
   ASSERT_EQ(p.feedback, 2);
 
-  // Raw DT bytes: 2, 0, 1, 3 (linear encoding)
-  ASSERT_EQ(p.operators[0].dt, 5); // linear 2 → hw -1
-  ASSERT_EQ(p.operators[1].dt, 7); // linear 0 → hw -3
-  ASSERT_EQ(p.operators[2].dt, 6); // linear 1 → hw -2
-  ASSERT_EQ(p.operators[3].dt, 4); // linear 3 → hw 0
+  // Raw DT bytes on disk (linear): 2, 0, 1, 3  →  hw: 5, 7, 6, 4
+  // algorithm-order after remap (disk→alg [0,2,1,3]): 5, 6, 7, 4
+  ASSERT_EQ(p.operators[0].dt, 5); // disk0 linear 2 → hw -1
+  ASSERT_EQ(p.operators[1].dt, 6); // disk2 linear 1 → hw -2
+  ASSERT_EQ(p.operators[2].dt, 7); // disk1 linear 0 → hw -3
+  ASSERT_EQ(p.operators[3].dt, 4); // disk3 linear 3 → hw 0
 
   return true;
 }
@@ -410,31 +409,36 @@ bool test_dmf_parse_detune() {
     if (p.name == "Brass1") brass1 = &p;
   }
 
-  // Bass_l1: raw DT [3, 6, 6, 3] → hardware [4, 3, 3, 4]
+  // On-disk DMF stores slot-register order (disk→alg remap: [0,2,1,3]).
+  //
+  // Bass_l1: raw DT (disk) [3, 6, 6, 3] → hw [4, 3, 3, 4]
+  //   → algorithm order: [4, 3, 3, 4]  (symmetric, unchanged by swap)
   ASSERT_TRUE(bass_l1 != nullptr);
-  ASSERT_EQ(bass_l1->operators[0].dt, 4); // linear 3 → 0
-  ASSERT_EQ(bass_l1->operators[1].dt, 3); // linear 6 → +3
-  ASSERT_EQ(bass_l1->operators[2].dt, 3); // linear 6 → +3
-  ASSERT_EQ(bass_l1->operators[3].dt, 4); // linear 3 → 0
+  ASSERT_EQ(bass_l1->operators[0].dt, 4);
+  ASSERT_EQ(bass_l1->operators[1].dt, 3);
+  ASSERT_EQ(bass_l1->operators[2].dt, 3);
+  ASSERT_EQ(bass_l1->operators[3].dt, 4);
 
   // Bass_l2: raw DT [3, 3, 3, 3] → all hardware 4 (no detune)
   ASSERT_TRUE(bass_l2 != nullptr);
   for (int i = 0; i < 4; ++i)
     ASSERT_EQ(bass_l2->operators[i].dt, 4);
 
-  // Bell1: raw DT [3, 0, 6, 6] → hardware [4, 7, 3, 3]
+  // Bell1: raw DT (disk) [3, 0, 6, 6] → hw [4, 7, 3, 3]
+  //   → algorithm order: [4, 3, 7, 3]
   ASSERT_TRUE(bell1 != nullptr);
-  ASSERT_EQ(bell1->operators[0].dt, 4); // linear 3 → 0
-  ASSERT_EQ(bell1->operators[1].dt, 7); // linear 0 → -3
-  ASSERT_EQ(bell1->operators[2].dt, 3); // linear 6 → +3
-  ASSERT_EQ(bell1->operators[3].dt, 3); // linear 6 → +3
+  ASSERT_EQ(bell1->operators[0].dt, 4); // disk0
+  ASSERT_EQ(bell1->operators[1].dt, 3); // disk2
+  ASSERT_EQ(bell1->operators[2].dt, 7); // disk1
+  ASSERT_EQ(bell1->operators[3].dt, 3); // disk3
 
-  // Brass1: raw DT [3, 1, 3, 5] → hardware [4, 6, 4, 2]
+  // Brass1: raw DT (disk) [3, 1, 3, 5] → hw [4, 6, 4, 2]
+  //   → algorithm order: [4, 4, 6, 2]
   ASSERT_TRUE(brass1 != nullptr);
-  ASSERT_EQ(brass1->operators[0].dt, 4); // linear 3 → 0
-  ASSERT_EQ(brass1->operators[1].dt, 6); // linear 1 → -2
-  ASSERT_EQ(brass1->operators[2].dt, 4); // linear 3 → 0
-  ASSERT_EQ(brass1->operators[3].dt, 2); // linear 5 → +2
+  ASSERT_EQ(brass1->operators[0].dt, 4); // disk0
+  ASSERT_EQ(brass1->operators[1].dt, 4); // disk2
+  ASSERT_EQ(brass1->operators[2].dt, 6); // disk1
+  ASSERT_EQ(brass1->operators[3].dt, 2); // disk3
 
   return true;
 }
