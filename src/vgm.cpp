@@ -1,5 +1,12 @@
 #include "ym2612_format/vgm.hpp"
 
+// The extraction algorithm (shadow register state, key-on snapshots,
+// silent-state filtering, carrier-TL volume grouping) is ported from
+// vgm2pre — https://github.com/vgmtool/vgm2pre
+// Copyright (c) 2013 Alex Rosario, MIT license — itself based on
+// Shiru's VGM2TFI.  This file is a reimplementation, not a verbatim
+// copy.
+
 #include <array>
 #include <cstring>
 #include <string>
