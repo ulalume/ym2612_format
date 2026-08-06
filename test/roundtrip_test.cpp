@@ -1903,8 +1903,9 @@ bool test_vgi_parse_synthesized() {
 
 bool test_vgi_roundtrip_synthesized() {
   // Build a Patch with every VGI-representable field set, serialize,
-  // parse back, compare field-by-field.
+  // parse back, compare.
   Patch original;
+  original.name = "rt";
   original.algorithm = 5;
   original.feedback = 7;
   original.fms = 3;
@@ -1915,7 +1916,7 @@ bool test_vgi_roundtrip_synthesized() {
     static const uint8_t dt_hw[] = {7, 0, 3, 6}; // -3, 0, +3, -2
     o.dt = dt_hw[i];
     o.tl = static_cast<uint8_t>(i * 21);
-    o.ks = static_cast<uint8_t>(3 - i % 4);
+    o.ks = static_cast<uint8_t>(3 - i);
     o.ar = static_cast<uint8_t>(28 + i);
     o.dr = static_cast<uint8_t>(i * 4);
     o.sr = static_cast<uint8_t>(i + 2);
@@ -1936,28 +1937,12 @@ bool test_vgi_roundtrip_synthesized() {
   ASSERT_TRUE(is_ok(parsed));
   const auto &p = get_ok(parsed).patches[0];
 
-  ASSERT_EQ(p.algorithm, original.algorithm);
-  ASSERT_EQ(p.feedback, original.feedback);
-  ASSERT_EQ(p.fms, original.fms);
-  ASSERT_EQ(p.ams, original.ams);
-  for (int i = 0; i < 4; ++i) {
-    const auto &oa = original.operators[i];
-    const auto &ob = p.operators[i];
-    ASSERT_EQ(ob.ml, oa.ml);
-    // Detune goes through the linear encoding; hw register 4 (-0)
-    // canonicalizes to 0 (+0), everything else survives.
-    uint8_t expected_dt = detune_from_linear(detune_to_linear(oa.dt));
-    ASSERT_EQ(ob.dt, expected_dt);
-    ASSERT_EQ(ob.tl, oa.tl);
-    ASSERT_EQ(ob.ks, oa.ks);
-    ASSERT_EQ(ob.ar, oa.ar);
-    ASSERT_EQ(ob.dr, oa.dr);
-    ASSERT_EQ(ob.sr, oa.sr);
-    ASSERT_EQ(ob.rr, oa.rr);
-    ASSERT_EQ(ob.sl, oa.sl);
-    ASSERT_EQ(ob.am, oa.am);
-    ASSERT_EQ(ob.ssg_enable, oa.ssg_enable);
-    ASSERT_EQ(ob.ssg, oa.ssg);
+  // Lenient comparison: the linear detune encoding canonicalizes
+  // hardware -0 (4) to +0 (0), which patches_equal already treats as
+  // equal; every other field must survive.
+  if (!patches_equal(original, p)) {
+    print_patch_diff(original, p);
+    return false;
   }
   return true;
 }
@@ -2071,6 +2056,7 @@ bool test_eif_roundtrip_synthesized() {
   // hardware encoding — including the 0 (+0) vs 4 (-0) distinction that
   // the linear formats (TFI/VGI) collapse.
   Patch original;
+  original.name = "rt";
   original.algorithm = 6;
   original.feedback = 1;
   for (int i = 0; i < 4; ++i) {
@@ -2079,7 +2065,7 @@ bool test_eif_roundtrip_synthesized() {
     static const uint8_t dt_hw[] = {0, 4, 7, 3}; // +0, -0, -3, +3
     o.dt = dt_hw[i];
     o.tl = static_cast<uint8_t>(127 - i * 13);
-    o.ks = static_cast<uint8_t>(i % 4);
+    o.ks = static_cast<uint8_t>(i);
     o.ar = static_cast<uint8_t>(31 - i * 2);
     o.dr = static_cast<uint8_t>(i * 7);
     o.sr = static_cast<uint8_t>(i * 5);
@@ -2100,23 +2086,11 @@ bool test_eif_roundtrip_synthesized() {
   ASSERT_TRUE(is_ok(parsed));
   const auto &p = get_ok(parsed).patches[0];
 
-  ASSERT_EQ(p.algorithm, original.algorithm);
-  ASSERT_EQ(p.feedback, original.feedback);
-  for (int i = 0; i < 4; ++i) {
-    const auto &oa = original.operators[i];
-    const auto &ob = p.operators[i];
-    ASSERT_EQ(ob.ml, oa.ml);
-    ASSERT_EQ(ob.dt, oa.dt); // exact, including 0 vs 4
-    ASSERT_EQ(ob.tl, oa.tl);
-    ASSERT_EQ(ob.ks, oa.ks);
-    ASSERT_EQ(ob.ar, oa.ar);
-    ASSERT_EQ(ob.dr, oa.dr);
-    ASSERT_EQ(ob.sr, oa.sr);
-    ASSERT_EQ(ob.rr, oa.rr);
-    ASSERT_EQ(ob.sl, oa.sl);
-    ASSERT_EQ(ob.am, oa.am);
-    ASSERT_EQ(ob.ssg_enable, oa.ssg_enable);
-    ASSERT_EQ(ob.ssg, oa.ssg);
+  // EIF stores raw registers, so the round-trip must be exact —
+  // including the DT 0 (+0) vs 4 (-0) distinction.
+  if (!patches_strict_equal(original, p)) {
+    print_patch_diff(original, p);
+    return false;
   }
   return true;
 }
@@ -2189,7 +2163,9 @@ static std::vector<uint8_t> make_vgm(const std::vector<uint8_t> &commands) {
   put32(0x34, 0x40 - 0x34);     // data offset → 0x40
   v.insert(v.end(), commands.begin(), commands.end());
   v.push_back(0x66);
-  put32(0x04, static_cast<uint32_t>(v.size()) - 4); // EOF offset
+  // EOF offset: not read by the parser; kept so fixtures are
+  // spec-valid VGMs playable in external tools.
+  put32(0x04, static_cast<uint32_t>(v.size()) - 4);
   return v;
 }
 

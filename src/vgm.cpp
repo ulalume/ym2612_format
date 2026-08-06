@@ -8,8 +8,12 @@
 // copy.
 
 #include <array>
+#include <cstdio>
 #include <cstring>
+#include <memory>
 #include <string>
+#include <type_traits>
+#include <unordered_set>
 #include <vector>
 
 #include <miniz.h>
@@ -24,9 +28,15 @@ bool is_gzip(const uint8_t *data, size_t size) {
   return size >= 2 && data[0] == 0x1F && data[1] == 0x8B;
 }
 
+/// Owning buffer for inflated VGZ data (freed with mz_free).
+struct Inflated {
+  std::unique_ptr<uint8_t[], void (*)(void *)> data{nullptr, mz_free};
+  size_t size = 0;
+};
+
 /// Decompress an RFC 1952 gzip stream via miniz raw inflate.
-/// Returns an empty vector on failure.
-std::vector<uint8_t> gunzip(const uint8_t *data, size_t size) {
+/// Returns an empty buffer on failure.
+Inflated gunzip(const uint8_t *data, size_t size) {
   if (size < 18 || data[2] != 8) // 8 = DEFLATE compression method
     return {};
   uint8_t flags = data[3];
@@ -56,9 +66,9 @@ std::vector<uint8_t> gunzip(const uint8_t *data, size_t size) {
                                            0 /* raw deflate */);
   if (!out)
     return {};
-  std::vector<uint8_t> result(static_cast<uint8_t *>(out),
-                              static_cast<uint8_t *>(out) + out_len);
-  mz_free(out);
+  Inflated result;
+  result.data.reset(static_cast<uint8_t *>(out));
+  result.size = out_len;
   return result;
 }
 
@@ -82,6 +92,14 @@ struct Snapshot {
   ChannelState state;
   uint8_t lfo = 0; // bits 0-2 = frequency, bit 3 = enable
 };
+
+/// Exact-dedup key: the raw bytes of a ChannelState.  All members are
+/// uint8_t, so the representation is dense and padding-free.
+static_assert(std::is_trivially_copyable_v<ChannelState> &&
+              sizeof(ChannelState) == 48);
+std::string state_key(const ChannelState &s) {
+  return {reinterpret_cast<const char *>(&s), sizeof(s)};
+}
 
 /// Bitmask of carrier (output) operator slots per algorithm, in
 /// register-slot order (bit 0 = slot 0 = OP1, ..., bit 3 = slot 3 = OP4).
@@ -210,60 +228,51 @@ private:
       return;
     if ((val & 0xF0) == 0) // key-off only
       return;
-    if (!prev_valid_[ch] || !(prev_[ch] == ch_[ch])) {
-      if (!is_silent(ch_[ch]) && !already_collected(ch_[ch]))
-        collected_.push_back({ch_[ch], lfo_});
-    }
-    prev_[ch] = ch_[ch];
-    prev_valid_[ch] = true;
-  }
-
-  bool already_collected(const ChannelState &s) const {
-    for (const auto &snap : collected_)
-      if (snap.state == s)
-        return true;
-    return false;
+    const ChannelState &s = ch_[ch];
+    if (is_silent(s))
+      return;
+    if (seen_.insert(state_key(s)).second)
+      collected_.push_back({s, lfo_});
   }
 
   std::array<ChannelState, 6> ch_{};
-  std::array<ChannelState, 6> prev_{};
-  std::array<bool, 6> prev_valid_{};
   bool dac_on_ = false;
   uint8_t lfo_ = 0;
   std::vector<Snapshot> collected_;
+  std::unordered_set<std::string> seen_; ///< keys of collected_ states
 };
 
 /// Group snapshots that are the same instrument at different volumes
 /// and keep the loudest variant of each, in first-appearance order.
 /// Groups whose every variant has all carriers muted are dropped.
+/// same_instrument is an equivalence relation (algorithm/feedback and
+/// all non-carrier-TL parameters are equal within a group), so any
+/// member can stand in as the group's representative for matching.
 std::vector<Snapshot> group_and_pick(const std::vector<Snapshot> &all) {
-  std::vector<int> group(all.size(), -1);
-  int n_groups = 0;
-  for (size_t i = 0; i < all.size(); ++i) {
-    if (group[i] >= 0)
-      continue;
-    group[i] = n_groups++;
-    for (size_t j = i + 1; j < all.size(); ++j)
-      if (group[j] < 0 && same_instrument(all[i].state, all[j].state))
-        group[j] = group[i];
+  struct Group {
+    Snapshot best;
+    int best_v;
+  };
+  std::vector<Group> groups;
+  for (const auto &snap : all) {
+    Group *g = nullptr;
+    for (auto &existing : groups) {
+      if (same_instrument(existing.best.state, snap.state)) {
+        g = &existing;
+        break;
+      }
+    }
+    int v = loudness(snap.state);
+    if (!g)
+      groups.push_back({snap, v});
+    else if (v > g->best_v) // strict: ties keep the earlier variant
+      *g = {snap, v};
   }
 
   std::vector<Snapshot> picked;
-  for (int g = 0; g < n_groups; ++g) {
-    int best = -1;
-    int best_v = 0;
-    for (size_t i = 0; i < all.size(); ++i) {
-      if (group[i] != g)
-        continue;
-      int v = loudness(all[i].state);
-      if (v > best_v) {
-        best_v = v;
-        best = static_cast<int>(i);
-      }
-    }
-    if (best >= 0)
-      picked.push_back(all[best]);
-  }
+  for (const auto &g : groups)
+    if (g.best_v > 0)
+      picked.push_back(g.best);
   return picked;
 }
 
@@ -324,6 +333,8 @@ int operand_length(uint8_t cmd, uint32_t version) {
     return 0; // wait 735 / 882
   if (cmd == 0x64)
     return 3; // override wait length
+  if (cmd == 0x68)
+    return 11; // PCM RAM write: 0x66 cc oo oo oo dd dd dd ss ss ss
   if (cmd >= 0x70 && cmd <= 0x8F)
     return 0; // short waits / DAC write+wait
   switch (cmd) { // DAC stream control (VGM 1.60)
@@ -344,15 +355,10 @@ int operand_length(uint8_t cmd, uint32_t version) {
   return -1; // 0x00-0x2F, 0x65, 0x69-0x6F, 0x96-0x9F: undefined
 }
 
-std::string hex_byte(uint8_t v) {
-  static const char digits[] = "0123456789ABCDEF";
-  return {digits[v >> 4], digits[v & 0x0F]};
-}
-
 } // namespace
 
 FormatInfo info() {
-  return {Format::Vgm, "VGM register log", "vgm", true, false, false};
+  return {Format::Vgm, "VGM/VGZ register log", "vgm", true, false, false};
 }
 
 ParseResult parse(const uint8_t *data, size_t size,
@@ -360,15 +366,15 @@ ParseResult parse(const uint8_t *data, size_t size,
   if (!data || size == 0)
     return Error{"Empty data"};
 
-  std::vector<uint8_t> decompressed;
+  Inflated inflated;
   const uint8_t *d = data;
   size_t n = size;
   if (is_gzip(data, size)) {
-    decompressed = gunzip(data, size);
-    if (decompressed.empty())
+    inflated = gunzip(data, size);
+    if (!inflated.data)
       return Error{"Failed to decompress VGZ (gzip) data"};
-    d = decompressed.data();
-    n = decompressed.size();
+    d = inflated.data.get();
+    n = inflated.size;
   }
 
   if (n < 0x40 || std::memcmp(d, "Vgm ", 4) != 0)
@@ -389,15 +395,6 @@ ParseResult parse(const uint8_t *data, size_t size,
   while (pos < n) {
     uint8_t cmd = d[pos++];
 
-    if (cmd == 0x52 || cmd == 0x53) { // YM2612 port 0 / port 1 write
-      if (pos + 2 > n) {
-        warnings.push_back("VGM data truncated mid-command");
-        break;
-      }
-      tracker.write(cmd - 0x52, d[pos], d[pos + 1]);
-      pos += 2;
-      continue;
-    }
     if (cmd == 0x66) // end of sound data
       break;
     if (cmd == 0x67) { // data block: 0x66 tt ss ss ss ss <data>
@@ -413,14 +410,12 @@ ParseResult parse(const uint8_t *data, size_t size,
       pos += 6 + static_cast<size_t>(block_size);
       continue;
     }
-    if (cmd == 0x68) { // PCM RAM write: 0x66 cc oo*3 dd*3 ss*3
-      pos += 11;
-      continue;
-    }
 
     int len = operand_length(cmd, version);
     if (len < 0) {
-      warnings.push_back("Unknown VGM command 0x" + hex_byte(cmd) +
+      char hex[3];
+      std::snprintf(hex, sizeof(hex), "%02X", cmd);
+      warnings.push_back(std::string("Unknown VGM command 0x") + hex +
                          "; stopping scan");
       break;
     }
@@ -428,6 +423,8 @@ ParseResult parse(const uint8_t *data, size_t size,
       warnings.push_back("VGM data truncated mid-command");
       break;
     }
+    if (cmd == 0x52 || cmd == 0x53) // YM2612 port 0 / port 1 write
+      tracker.write(cmd - 0x52, d[pos], d[pos + 1]);
     pos += static_cast<size_t>(len);
   }
 

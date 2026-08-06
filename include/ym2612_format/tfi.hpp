@@ -7,7 +7,7 @@
 namespace ym2612_format::tfi {
 
 /// TFM Music Maker / VGMrips .tfi binary format — 42 bytes, one
-/// instrument per file.
+/// instrument per file.  Spec: https://vgmrips.net/wiki/TFI_File_Format
 ///
 /// Designed for YM2203 and compatible with the YM2612 FM core, so every
 /// field maps 1:1 onto the Patch operator/channel parameters without

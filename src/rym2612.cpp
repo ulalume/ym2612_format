@@ -86,6 +86,15 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
 
   std::string xml(reinterpret_cast<const char *>(data), size);
 
+  // Sniff: RYM2612 presets are JUCE plugin-state XML full of
+  // <PARAM id="..." entries.  Without at least one, treat the data as
+  // foreign — every extract below would silently fall back to its
+  // default and any buffer would "parse".  Keeping this parser strict
+  // is what lets the format registry try it before the lenient DMP
+  // catch-all (see formats() in converter.cpp).
+  if (xml.find("<PARAM id=\"") == std::string::npos)
+    return Error{"Not a RYM2612 preset (no <PARAM> entries found)"};
+
   try {
     Patch patch;
 

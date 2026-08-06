@@ -81,21 +81,17 @@ ParseResult parse(const uint8_t *data, size_t size,
 SerializeResult serialize(const Patch &patch) {
   std::vector<uint8_t> data(kFileSize, 0);
 
-  data[0] = static_cast<uint8_t>((patch.algorithm & 0x07) |
-                                 ((patch.feedback & 0x07) << 3));
+  data[0] = (patch.algorithm & 0x07) | ((patch.feedback & 0x07) << 3);
 
   for (int op = 0; op < 4; ++op) {
     const auto &o = patch.operators[op];
 
-    data[1 + op] = static_cast<uint8_t>((o.ml & 0x0F) | ((o.dt & 0x07) << 4));
+    data[1 + op] = (o.ml & 0x0F) | ((o.dt & 0x07) << 4);
     data[5 + op] = std::min<uint8_t>(o.tl, 127);
-    data[9 + op] = static_cast<uint8_t>(std::min<uint8_t>(o.ar, 31) |
-                                        ((o.ks & 0x03) << 6));
-    data[13 + op] = static_cast<uint8_t>(std::min<uint8_t>(o.dr, 31) |
-                                         (o.am ? 0x80 : 0x00));
+    data[9 + op] = std::min<uint8_t>(o.ar, 31) | ((o.ks & 0x03) << 6);
+    data[13 + op] = std::min<uint8_t>(o.dr, 31) | (o.am ? 0x80 : 0x00);
     data[17 + op] = std::min<uint8_t>(o.sr, 31);
-    data[21 + op] = static_cast<uint8_t>(std::min<uint8_t>(o.rr, 15) |
-                                         ((o.sl & 0x0F) << 4));
+    data[21 + op] = std::min<uint8_t>(o.rr, 15) | ((o.sl & 0x0F) << 4);
     data[25 + op] = (o.ssg_enable ? 0x08 : 0x00) | (o.ssg & 0x07);
   }
 

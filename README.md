@@ -63,7 +63,7 @@ Dependencies (nlohmann/json, miniz) are fetched automatically via CMake FetchCon
 ./build/ym2612_convert convert song.vgz -o instruments.vgi
 ```
 
-Files containing multiple patches (DMF, FUR, MML, GINPKG, VGM) are written as separate output files.
+Files containing multiple patches (DMF, FUR, MML, OPM, GINPKG, VGM) are written as separate output files.
 
 ## Library usage
 

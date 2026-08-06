@@ -92,14 +92,14 @@ FormatInfo make_info(Format f,
 }
 
 const std::vector<FormatEntry> &formats() {
+  // Ordering rule for hint-less auto-detection: every entry except Dmp
+  // rejects foreign data (magic bytes or strict size/range sniffing),
+  // so the lenient DMP parser — which accepts any buffer >= 7 bytes
+  // with warnings only — must come LAST or it shadows the strict
+  // sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
-      // Vgm goes first: it has a strong magic ("Vgm " / gzip) so it can
-      // never misclaim another format, while the lenient DMP parser
-      // would otherwise claim VGM data during hint-less auto-detection.
-      {make_info(Format::Vgm, "VGM register log", "vgm", true, false),
+      {make_info(Format::Vgm, "VGM/VGZ register log", "vgm", true, false),
        vgm::parse, nullptr, nullptr},
-      {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
-       dmp::parse, dmp::serialize, nullptr},
       {make_info(Format::Dmf, "DefleMask Module", "dmf", true, false),
        dmf::parse, nullptr, nullptr},
       {make_info(Format::Fui, "Furnace Instrument", "fui", true, true),
@@ -122,6 +122,9 @@ const std::vector<FormatEntry> &formats() {
        vgi::parse, vgi::serialize, nullptr},
       {make_info(Format::Eif, "Echo (EIF)", "eif", true, true),
        eif::parse, eif::serialize, nullptr},
+      // Lenient catch-all — must stay last (see ordering rule above).
+      {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
+       dmp::parse, dmp::serialize, nullptr},
   };
   return entries;
 }
@@ -159,8 +162,10 @@ ParseResult parse(const uint8_t *data, size_t size,
     }
   }
 
-  // Try all formats
+  // Try all formats (the hinted one already failed above — skip it)
   for (const auto &entry : formats()) {
+    if (hint && entry.info.format == *hint)
+      continue;
     auto result = entry.parse(data, size, name);
     if (is_ok(result))
       return result;

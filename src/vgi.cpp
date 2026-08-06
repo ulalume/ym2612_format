@@ -96,8 +96,7 @@ SerializeResult serialize(const Patch &patch) {
 
   data[0] = patch.algorithm & 0x07;
   data[1] = patch.feedback & 0x07;
-  data[2] = static_cast<uint8_t>((patch.fms & 0x07) |
-                                 ((patch.ams & 0x03) << 4));
+  data[2] = (patch.fms & 0x07) | ((patch.ams & 0x03) << 4);
 
   for (int op = 0; op < 4; ++op) {
     const auto &o = patch.operators[op];
@@ -108,8 +107,7 @@ SerializeResult serialize(const Patch &patch) {
     p[2] = std::min<uint8_t>(o.tl, 127);
     p[3] = o.ks & 0x03;
     p[4] = std::min<uint8_t>(o.ar, 31);
-    p[5] = static_cast<uint8_t>(std::min<uint8_t>(o.dr, 31) |
-                                (o.am ? 0x80 : 0x00));
+    p[5] = std::min<uint8_t>(o.dr, 31) | (o.am ? 0x80 : 0x00);
     p[6] = std::min<uint8_t>(o.sr, 31);
     p[7] = std::min<uint8_t>(o.rr, 15);
     p[8] = std::min<uint8_t>(o.sl, 15);
