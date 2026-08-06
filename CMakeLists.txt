@@ -44,6 +44,9 @@ add_library(ym2612_format STATIC
   src/ctrmml.cpp
   src/opm.cpp
   src/tfi.cpp
+  src/vgi.cpp
+  src/eif.cpp
+  src/vgm.cpp
   src/converter.cpp
 )
 

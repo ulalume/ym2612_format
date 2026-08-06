@@ -3,6 +3,7 @@
 #include "ym2612_format/ctrmml.hpp"
 #include "ym2612_format/dmf.hpp"
 #include "ym2612_format/dmp.hpp"
+#include "ym2612_format/eif.hpp"
 #include "ym2612_format/fui.hpp"
 #include "ym2612_format/fur.hpp"
 #include "ym2612_format/gin.hpp"
@@ -10,6 +11,8 @@
 #include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
 #include "ym2612_format/tfi.hpp"
+#include "ym2612_format/vgi.hpp"
+#include "ym2612_format/vgm.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -33,6 +36,10 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"fur", Format::Fur},
       {"opm", Format::Opm},
       {"tfi", Format::Tfi},
+      {"vgi", Format::Vgi},
+      {"eif", Format::Eif},
+      {"vgm", Format::Vgm},
+      {"vgz", Format::Vgm},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -52,6 +59,9 @@ const char *format_to_extension(Format f) {
   case Format::Fur:     return "fur";
   case Format::Opm:     return "opm";
   case Format::Tfi:     return "tfi";
+  case Format::Vgi:     return "vgi";
+  case Format::Eif:     return "eif";
+  case Format::Vgm:     return "vgm";
   }
   return "";
 }
@@ -83,6 +93,11 @@ FormatInfo make_info(Format f,
 
 const std::vector<FormatEntry> &formats() {
   static const std::vector<FormatEntry> entries = {
+      // Vgm goes first: it has a strong magic ("Vgm " / gzip) so it can
+      // never misclaim another format, while the lenient DMP parser
+      // would otherwise claim VGM data during hint-less auto-detection.
+      {make_info(Format::Vgm, "VGM register log", "vgm", true, false),
+       vgm::parse, nullptr, nullptr},
       {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
        dmp::parse, dmp::serialize, nullptr},
       {make_info(Format::Dmf, "DefleMask Module", "dmf", true, false),
@@ -103,6 +118,10 @@ const std::vector<FormatEntry> &formats() {
        opm::parse, nullptr, nullptr},
       {make_info(Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true),
        tfi::parse, tfi::serialize, nullptr},
+      {make_info(Format::Vgi, "VGM Music Maker (VGI)", "vgi", true, true),
+       vgi::parse, vgi::serialize, nullptr},
+      {make_info(Format::Eif, "Echo (EIF)", "eif", true, true),
+       eif::parse, eif::serialize, nullptr},
   };
   return entries;
 }

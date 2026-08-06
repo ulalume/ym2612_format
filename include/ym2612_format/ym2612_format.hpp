@@ -6,6 +6,7 @@
 #include "ctrmml.hpp"
 #include "dmf.hpp"
 #include "dmp.hpp"
+#include "eif.hpp"
 #include "format.hpp"
 #include "fui.hpp"
 #include "fur.hpp"
@@ -16,3 +17,5 @@
 #include "result.hpp"
 #include "rym2612.hpp"
 #include "tfi.hpp"
+#include "vgi.hpp"
+#include "vgm.hpp"

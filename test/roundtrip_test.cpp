@@ -1,6 +1,8 @@
 #include "ym2612_format/ym2612_format.hpp"
 #include "ym2612_format/detune.hpp"
 
+#include <miniz.h> // gzip framing for the VGZ test
+
 #include <cassert>
 #include <cstring>
 #include <filesystem>
@@ -1848,6 +1850,568 @@ bool test_tfi_via_high_level() {
   return true;
 }
 
+// ---- VGI parse/serialize tests ----
+
+bool test_vgi_parse_synthesized() {
+  // Synthesized 43-byte VGI covering the fields TFI lacks: channel
+  // FMS/AMS in the third header byte and per-op AM-EN in DR bit 7.
+  const uint8_t bytes[43] = {
+      0x04, 0x03, 0x32, // alg=4, fb=3, FMS=2 AMS=3
+      // OP0: MUL=2, DT=1(-2), TL=38, RS=1, AR=31, DR=9|AM, SR=4, RR=8, SL=3, SSG=0
+      0x02, 0x01, 0x26, 0x01, 0x1F, 0x89, 0x04, 0x08, 0x03, 0x00,
+      // OP1: MUL=5, DT=3(0), TL=0, RS=0, AR=25, DR=0, SR=0, RR=7, SL=0, SSG=0x0A
+      0x05, 0x03, 0x00, 0x00, 0x19, 0x00, 0x00, 0x07, 0x00, 0x0A,
+      // OP2: MUL=1, DT=5(+2), TL=20, RS=2, AR=30, DR=6, SR=2, RR=6, SL=2, SSG=0
+      0x01, 0x05, 0x14, 0x02, 0x1E, 0x06, 0x02, 0x06, 0x02, 0x00,
+      // OP3: MUL=1, DT=6(+3), TL=4, RS=3, AR=28, DR=5, SR=1, RR=5, SL=1, SSG=0
+      0x01, 0x06, 0x04, 0x03, 0x1C, 0x05, 0x01, 0x05, 0x01, 0x00,
+  };
+
+  auto result = vgi::parse(bytes, sizeof(bytes), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  ASSERT_EQ(p.fms, 2);
+  ASSERT_EQ(p.ams, 3);
+  ASSERT_TRUE(!p.lfo_enable); // VGI has no LFO field
+  ASSERT_TRUE(p.left && p.right);
+
+  // OP0: AM-EN set in DR byte.
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].dt, detune_from_linear(1)); // -2 in hw encoding
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_TRUE(!p.operators[0].ssg_enable);
+
+  // OP1: SSG-EG 0x0A = enabled, mode 2; no AM.
+  ASSERT_TRUE(p.operators[1].ssg_enable);
+  ASSERT_EQ(p.operators[1].ssg, 2);
+  ASSERT_TRUE(!p.operators[1].am);
+  return true;
+}
+
+bool test_vgi_roundtrip_synthesized() {
+  // Build a Patch with every VGI-representable field set, serialize,
+  // parse back, compare field-by-field.
+  Patch original;
+  original.algorithm = 5;
+  original.feedback = 7;
+  original.fms = 3;
+  original.ams = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (i * 5 + 2) & 0x0F;
+    static const uint8_t dt_hw[] = {7, 0, 3, 6}; // -3, 0, +3, -2
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(i * 21);
+    o.ks = static_cast<uint8_t>(3 - i % 4);
+    o.ar = static_cast<uint8_t>(28 + i);
+    o.dr = static_cast<uint8_t>(i * 4);
+    o.sr = static_cast<uint8_t>(i + 2);
+    o.rr = static_cast<uint8_t>(i + 4);
+    o.sl = static_cast<uint8_t>(i * 3);
+    o.am = (i % 2) == 1; // AM-EN survives in VGI (unlike TFI)
+    o.ssg_enable = (i == 1);
+    o.ssg = (i == 1) ? 3 : 0;
+    o.enable = true;
+  }
+
+  auto ser = vgi::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(43));
+
+  auto parsed = vgi::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  ASSERT_EQ(p.algorithm, original.algorithm);
+  ASSERT_EQ(p.feedback, original.feedback);
+  ASSERT_EQ(p.fms, original.fms);
+  ASSERT_EQ(p.ams, original.ams);
+  for (int i = 0; i < 4; ++i) {
+    const auto &oa = original.operators[i];
+    const auto &ob = p.operators[i];
+    ASSERT_EQ(ob.ml, oa.ml);
+    // Detune goes through the linear encoding; hw register 4 (-0)
+    // canonicalizes to 0 (+0), everything else survives.
+    uint8_t expected_dt = detune_from_linear(detune_to_linear(oa.dt));
+    ASSERT_EQ(ob.dt, expected_dt);
+    ASSERT_EQ(ob.tl, oa.tl);
+    ASSERT_EQ(ob.ks, oa.ks);
+    ASSERT_EQ(ob.ar, oa.ar);
+    ASSERT_EQ(ob.dr, oa.dr);
+    ASSERT_EQ(ob.sr, oa.sr);
+    ASSERT_EQ(ob.rr, oa.rr);
+    ASSERT_EQ(ob.sl, oa.sl);
+    ASSERT_EQ(ob.am, oa.am);
+    ASSERT_EQ(ob.ssg_enable, oa.ssg_enable);
+    ASSERT_EQ(ob.ssg, oa.ssg);
+  }
+  return true;
+}
+
+bool test_vgi_sniff_rejects_non_vgi() {
+  // Wrong size — reject (42 is TFI, not VGI).
+  std::vector<uint8_t> tfi_size(42, 0);
+  ASSERT_TRUE(!is_ok(vgi::parse(tfi_size.data(), tfi_size.size())));
+  std::vector<uint8_t> too_big(44, 0);
+  ASSERT_TRUE(!is_ok(vgi::parse(too_big.data(), too_big.size())));
+
+  // Right size, but unused bits set in the FMS/AMS byte.
+  std::vector<uint8_t> bad_fmsams(43, 0);
+  bad_fmsams[2] = 0x88; // bit 3 and bit 7 must be clear
+  ASSERT_TRUE(!is_ok(vgi::parse(bad_fmsams.data(), bad_fmsams.size())));
+
+  // Right size, but unused bits set in a DR byte (bit 7 = AM is fine,
+  // bits 5-6 are not).
+  std::vector<uint8_t> bad_dr(43, 0);
+  bad_dr[3 + 5] = 0x40;
+  ASSERT_TRUE(!is_ok(vgi::parse(bad_dr.data(), bad_dr.size())));
+
+  // Right size, but algorithm out of range.
+  std::vector<uint8_t> bad_alg(43, 0);
+  bad_alg[0] = 8;
+  ASSERT_TRUE(!is_ok(vgi::parse(bad_alg.data(), bad_alg.size())));
+  return true;
+}
+
+bool test_vgi_via_high_level() {
+  auto f = format_from_string("vgi");
+  ASSERT_TRUE(f.has_value() && *f == Format::Vgi);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Vgi)) == "vgi");
+
+  Patch p;
+  p.algorithm = 1;
+  p.feedback = 2;
+  p.fms = 5;
+  p.ams = 1;
+  for (int i = 0; i < 4; ++i) {
+    p.operators[i].ar = 31;
+    p.operators[i].tl = static_cast<uint8_t>(10 * i);
+  }
+  auto ser = serialize(Format::Vgi, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(43));
+
+  auto parsed = parse(get_ok(ser).data(), get_ok(ser).size(), Format::Vgi,
+                      "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].fms, 5);
+  return true;
+}
+
+// ---- EIF parse/serialize tests ----
+
+bool test_eif_parse_synthesized() {
+  // Synthesized 29-byte EIF: raw register values grouped by parameter.
+  const uint8_t bytes[29] = {
+      0x1C,                   // $B0: alg=4, fb=3
+      0x12, 0x71, 0x04, 0x41, // $30: DT|MUL per op
+      0x26, 0x00, 0x14, 0x04, // $40: TL
+      0x5F, 0x19, 0x9E, 0x1C, // $50: RS|AR
+      0x89, 0x00, 0x06, 0x05, // $60: AM|DR
+      0x04, 0x00, 0x02, 0x01, // $70: SR
+      0x38, 0x07, 0x26, 0x15, // $80: SL|RR
+      0x0C, 0x00, 0x00, 0x00, // $90: SSG-EG
+  };
+
+  auto result = eif::parse(bytes, sizeof(bytes), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  // EIF has no FMS/AMS/LFO — defaults.
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_TRUE(p.left && p.right);
+
+  // OP0: 0x12 = DT 1, MUL 2; 0x5F = RS 1, AR 31; 0x89 = AM, DR 9;
+  //      0x38 = SL 3, RR 8; SSG 0x0C = enabled mode 4.
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+
+  // OP1: 0x71 = DT 7 (-3, hardware encoding preserved), MUL 1.
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  // OP2: 0x9E = RS 2, AR 30.
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+  return true;
+}
+
+bool test_eif_roundtrip_synthesized() {
+  // EIF stores raw register values, so detune must round-trip in full
+  // hardware encoding — including the 0 (+0) vs 4 (-0) distinction that
+  // the linear formats (TFI/VGI) collapse.
+  Patch original;
+  original.algorithm = 6;
+  original.feedback = 1;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (15 - i) & 0x0F;
+    static const uint8_t dt_hw[] = {0, 4, 7, 3}; // +0, -0, -3, +3
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(127 - i * 13);
+    o.ks = static_cast<uint8_t>(i % 4);
+    o.ar = static_cast<uint8_t>(31 - i * 2);
+    o.dr = static_cast<uint8_t>(i * 7);
+    o.sr = static_cast<uint8_t>(i * 5);
+    o.rr = static_cast<uint8_t>(15 - i);
+    o.sl = static_cast<uint8_t>(i * 4);
+    o.am = (i == 0 || i == 3);
+    o.ssg_enable = (i == 2);
+    o.ssg = (i == 2) ? 7 : 0;
+    o.enable = true;
+  }
+
+  auto ser = eif::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(29));
+
+  auto parsed = eif::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  ASSERT_EQ(p.algorithm, original.algorithm);
+  ASSERT_EQ(p.feedback, original.feedback);
+  for (int i = 0; i < 4; ++i) {
+    const auto &oa = original.operators[i];
+    const auto &ob = p.operators[i];
+    ASSERT_EQ(ob.ml, oa.ml);
+    ASSERT_EQ(ob.dt, oa.dt); // exact, including 0 vs 4
+    ASSERT_EQ(ob.tl, oa.tl);
+    ASSERT_EQ(ob.ks, oa.ks);
+    ASSERT_EQ(ob.ar, oa.ar);
+    ASSERT_EQ(ob.dr, oa.dr);
+    ASSERT_EQ(ob.sr, oa.sr);
+    ASSERT_EQ(ob.rr, oa.rr);
+    ASSERT_EQ(ob.sl, oa.sl);
+    ASSERT_EQ(ob.am, oa.am);
+    ASSERT_EQ(ob.ssg_enable, oa.ssg_enable);
+    ASSERT_EQ(ob.ssg, oa.ssg);
+  }
+  return true;
+}
+
+bool test_eif_sniff_rejects_non_eif() {
+  // Wrong size — reject.
+  std::vector<uint8_t> too_small(28, 0);
+  ASSERT_TRUE(!is_ok(eif::parse(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(30, 0);
+  ASSERT_TRUE(!is_ok(eif::parse(too_big.data(), too_big.size())));
+
+  // Right size, but unused bits set in the $B0 byte.
+  std::vector<uint8_t> bad_b0(29, 0);
+  bad_b0[0] = 0x40;
+  ASSERT_TRUE(!is_ok(eif::parse(bad_b0.data(), bad_b0.size())));
+
+  // Right size, but bit 7 set in a $30 (DT|MUL) byte.
+  std::vector<uint8_t> bad_dtml(29, 0);
+  bad_dtml[1] = 0x80;
+  ASSERT_TRUE(!is_ok(eif::parse(bad_dtml.data(), bad_dtml.size())));
+
+  // Right size, but TL out of 7-bit range.
+  std::vector<uint8_t> bad_tl(29, 0);
+  bad_tl[5] = 0x80;
+  ASSERT_TRUE(!is_ok(eif::parse(bad_tl.data(), bad_tl.size())));
+  return true;
+}
+
+bool test_eif_via_high_level() {
+  auto f = format_from_string("eif");
+  ASSERT_TRUE(f.has_value() && *f == Format::Eif);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Eif)) == "eif");
+
+  Patch p;
+  p.algorithm = 7;
+  p.feedback = 4;
+  for (int i = 0; i < 4; ++i) {
+    p.operators[i].ar = 31;
+    p.operators[i].tl = 20;
+  }
+  auto ser = serialize(Format::Eif, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(29));
+
+  auto parsed = parse(get_ok(ser).data(), get_ok(ser).size(), Format::Eif,
+                      "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 7);
+  return true;
+}
+
+// ---- VGM extraction tests ----
+
+/// Build a minimal v1.50 VGM around the given command stream (0x66
+/// terminator appended automatically).
+static std::vector<uint8_t> make_vgm(const std::vector<uint8_t> &commands) {
+  std::vector<uint8_t> v(0x40, 0);
+  v[0] = 'V';
+  v[1] = 'g';
+  v[2] = 'm';
+  v[3] = ' ';
+  auto put32 = [&v](size_t off, uint32_t val) {
+    v[off] = val & 0xFF;
+    v[off + 1] = (val >> 8) & 0xFF;
+    v[off + 2] = (val >> 16) & 0xFF;
+    v[off + 3] = (val >> 24) & 0xFF;
+  };
+  put32(0x08, 0x150);           // version 1.50
+  put32(0x2C, 7670453);         // YM2612 clock
+  put32(0x34, 0x40 - 0x34);     // data offset → 0x40
+  v.insert(v.end(), commands.begin(), commands.end());
+  v.push_back(0x66);
+  put32(0x04, static_cast<uint32_t>(v.size()) - 4); // EOF offset
+  return v;
+}
+
+/// Append the YM2612 writes for one operator slot of one channel.
+static void emit_op(std::vector<uint8_t> &c, int port, int ch, int slot,
+                    uint8_t dtml, uint8_t tl, uint8_t ksar, uint8_t amdr,
+                    uint8_t sr, uint8_t slrr, uint8_t ssg) {
+  uint8_t cmd = port ? 0x53 : 0x52;
+  uint8_t base = static_cast<uint8_t>(ch + slot * 4);
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x30 + base), dtml});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x40 + base), tl});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x50 + base), ksar});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x60 + base), amdr});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x70 + base), sr});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x80 + base), slrr});
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0x90 + base), ssg});
+}
+
+/// Standard 4-op test patch on the given channel (algorithm 2, so only
+/// slot 3 is a carrier).
+static void emit_test_patch(std::vector<uint8_t> &c, int port, int ch) {
+  uint8_t cmd = port ? 0x53 : 0x52;
+  emit_op(c, port, ch, 0, 0x12, 0x28, 0x5F, 0x8A, 0x05, 0x28, 0x0C);
+  emit_op(c, port, ch, 1, 0x71, 0x00, 0x14, 0x00, 0x00, 0x06, 0x00);
+  emit_op(c, port, ch, 2, 0x04, 0x10, 0x99, 0x03, 0x02, 0x17, 0x00);
+  emit_op(c, port, ch, 3, 0x41, 0x08, 0x1C, 0x04, 0x01, 0x05, 0x00);
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0xB0 + ch), 0x2A}); // fb=5 alg=2
+  c.insert(c.end(), {cmd, static_cast<uint8_t>(0xB4 + ch), 0x92}); // L-pan, AMS=1, FMS=2
+}
+
+bool test_vgm_extract_basic() {
+  std::vector<uint8_t> c;
+  c.insert(c.end(), {0x52, 0x22, 0x0B}); // LFO on, freq 3
+  emit_test_patch(c, 0, 0);
+  // Noise the parser must skip: PSG write, waits, DAC write+wait,
+  // a data block, and a DAC stream setup command.
+  c.insert(c.end(), {0x50, 0x9F});
+  c.insert(c.end(), {0x61, 0x44, 0x01});
+  c.push_back(0x62);
+  c.push_back(0x70);
+  c.push_back(0x80);
+  c.insert(c.end(), {0x67, 0x66, 0x00, 0x04, 0x00, 0x00, 0x00, // block hdr
+                     0xDE, 0xAD, 0xBE, 0xEF});                 // block data
+  c.insert(c.end(), {0x90, 0x00, 0x02, 0x00, 0x2A});
+  c.insert(c.end(), {0x52, 0x28, 0xF0}); // key on ch1
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "test");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "test_0");
+  ASSERT_EQ(p.algorithm, 2);
+  ASSERT_EQ(p.feedback, 5);
+  ASSERT_EQ(p.ams, 1);
+  ASSERT_EQ(p.fms, 2);
+  // LFO captured from $22 at key-on.
+  ASSERT_TRUE(p.lfo_enable);
+  ASSERT_EQ(p.lfo_frequency, 3);
+  // Pan normalized to both-on even though the VGM had left-only.
+  ASSERT_TRUE(p.left && p.right);
+
+  // OP slot 0: 0x12=DT1/MUL2, TL 0x28, 0x5F=KS1/AR31, 0x8A=AM/DR10,
+  // SR 5, 0x28=SL2/RR8, SSG 0x0C.
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 0x28);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 10);
+  ASSERT_EQ(p.operators[0].sr, 5);
+  ASSERT_EQ(p.operators[0].sl, 2);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+
+  // OP slot 1: DT 7 kept in hardware encoding.
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  // OP slot 3: DT 4 (-0) preserved, not collapsed to 0.
+  ASSERT_EQ(p.operators[3].dt, 4);
+  ASSERT_EQ(p.operators[3].tl, 0x08);
+  return true;
+}
+
+bool test_vgm_volume_variants_grouped() {
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0}); // key on: carrier TL=0x08
+  c.insert(c.end(), {0x52, 0x28, 0x00}); // key off
+  c.insert(c.end(), {0x52, 0x4C, 0x30}); // carrier (slot 3) TL → 0x30, quieter
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  c.insert(c.end(), {0x52, 0x28, 0x00});
+  c.insert(c.end(), {0x52, 0x4C, 0x02}); // carrier TL → 0x02, loudest
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  c.insert(c.end(), {0x52, 0x28, 0x00});
+  // Change a modulator TL → genuinely different instrument.
+  c.insert(c.end(), {0x52, 0x40, 0x50}); // slot 0 TL → 0x50
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  // Re-key the same state: must not create another entry.
+  c.insert(c.end(), {0x52, 0x28, 0x00});
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "vol");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+
+  // Three carrier-TL variants collapse into one instrument (loudest
+  // kept); the modulator change stands alone.
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(2));
+  ASSERT_EQ(ok.patches[0].operators[3].tl, 0x02);
+  ASSERT_EQ(ok.patches[0].operators[0].tl, 0x28);
+  ASSERT_EQ(ok.patches[1].operators[0].tl, 0x50);
+  ASSERT_TRUE(ok.patches[0].name == "vol_0");
+  ASSERT_TRUE(ok.patches[1].name == "vol_1");
+  return true;
+}
+
+bool test_vgm_silent_dac_and_invalid_channels() {
+  std::vector<uint8_t> c;
+  // Channel 1 state is all-zero (every AR=0) → silent, must be skipped.
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  // Invalid key-on channel codes 3 and 7 must be ignored.
+  c.insert(c.end(), {0x52, 0x28, 0xF3});
+  c.insert(c.end(), {0x52, 0x28, 0xF7});
+  // Valid patch on channel 6 (port 1, offset 2), but DAC is on → skip.
+  emit_test_patch(c, 1, 2);
+  c.insert(c.end(), {0x52, 0x2B, 0x80}); // DAC on
+  c.insert(c.end(), {0x52, 0x28, 0xF6});
+  // DAC off → the same key-on now captures.
+  c.insert(c.end(), {0x52, 0x2B, 0x00});
+  c.insert(c.end(), {0x52, 0x28, 0xF6});
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "ch6");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+  ASSERT_EQ(ok.patches[0].algorithm, 2);
+  ASSERT_EQ(ok.patches[0].feedback, 5);
+  ASSERT_EQ(ok.patches[0].operators[0].dt, 1);
+  return true;
+}
+
+bool test_vgm_no_instruments_warns() {
+  // Valid VGM containing only PSG writes → ok, zero patches, warning.
+  std::vector<uint8_t> c = {0x50, 0x9F, 0x62};
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "empty");
+  ASSERT_TRUE(is_ok(result));
+  ASSERT_EQ(get_ok(result).patches.size(), static_cast<size_t>(0));
+  ASSERT_TRUE(!get_ok(result).warnings.empty());
+  return true;
+}
+
+bool test_vgm_vgz_gzip() {
+  // Gzip-wrap the basic VGM (with an FNAME field to exercise header
+  // skipping) and expect the same extraction result.
+  std::vector<uint8_t> c;
+  c.insert(c.end(), {0x52, 0x22, 0x0B});
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto plain = make_vgm(c);
+
+  size_t def_len = 0;
+  void *def = tdefl_compress_mem_to_heap(plain.data(), plain.size(), &def_len,
+                                         128 /* max probes */);
+  ASSERT_TRUE(def != nullptr);
+
+  std::vector<uint8_t> gz = {0x1F, 0x8B, 0x08, 0x08, 0, 0, 0, 0, 0x00, 0xFF};
+  const char *fname = "test.vgm";
+  gz.insert(gz.end(), fname, fname + 9); // includes NUL
+  gz.insert(gz.end(), static_cast<uint8_t *>(def),
+            static_cast<uint8_t *>(def) + def_len);
+  mz_free(def);
+  uint32_t crc = static_cast<uint32_t>(
+      mz_crc32(MZ_CRC32_INIT, plain.data(), plain.size()));
+  uint32_t isize = static_cast<uint32_t>(plain.size());
+  for (uint32_t v32 : {crc, isize})
+    for (int b = 0; b < 4; ++b)
+      gz.push_back((v32 >> (b * 8)) & 0xFF);
+
+  auto result = vgm::parse(gz.data(), gz.size(), "gz");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+  ASSERT_EQ(ok.patches[0].algorithm, 2);
+  ASSERT_TRUE(ok.patches[0].lfo_enable);
+  return true;
+}
+
+bool test_vgm_via_high_level() {
+  auto f = format_from_string("vgm");
+  ASSERT_TRUE(f.has_value() && *f == Format::Vgm);
+  auto fz = format_from_string("vgz");
+  ASSERT_TRUE(fz.has_value() && *fz == Format::Vgm);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Vgm)) == "vgm");
+
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto v = make_vgm(c);
+
+  // Hint-less auto-detection must identify VGM by its magic (and not
+  // fall into a lenient magic-less parser).
+  auto result = parse(v.data(), v.size(), std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(result));
+  ASSERT_EQ(get_ok(result).patches.size(), static_cast<size_t>(1));
+  ASSERT_EQ(get_ok(result).patches[0].algorithm, 2);
+  ASSERT_TRUE(get_ok(result).patches[0].name == "auto_0");
+
+  // VGM is read-only.
+  auto ser = serialize(Format::Vgm, get_ok(result).patches[0]);
+  ASSERT_TRUE(!is_ok(ser));
+  return true;
+}
+
 // ---- Main ----
 
 int main() {
@@ -1917,6 +2481,26 @@ int main() {
   RUN_TEST(test_tfi_parse_real_file);
   RUN_TEST(test_tfi_sniff_rejects_non_tfi);
   RUN_TEST(test_tfi_via_high_level);
+
+  std::cout << "\n=== VGI parse/serialize ===\n";
+  RUN_TEST(test_vgi_parse_synthesized);
+  RUN_TEST(test_vgi_roundtrip_synthesized);
+  RUN_TEST(test_vgi_sniff_rejects_non_vgi);
+  RUN_TEST(test_vgi_via_high_level);
+
+  std::cout << "\n=== EIF parse/serialize ===\n";
+  RUN_TEST(test_eif_parse_synthesized);
+  RUN_TEST(test_eif_roundtrip_synthesized);
+  RUN_TEST(test_eif_sniff_rejects_non_eif);
+  RUN_TEST(test_eif_via_high_level);
+
+  std::cout << "\n=== VGM extraction ===\n";
+  RUN_TEST(test_vgm_extract_basic);
+  RUN_TEST(test_vgm_volume_variants_grouped);
+  RUN_TEST(test_vgm_silent_dac_and_invalid_channels);
+  RUN_TEST(test_vgm_no_instruments_warns);
+  RUN_TEST(test_vgm_vgz_gzip);
+  RUN_TEST(test_vgm_via_high_level);
 
   std::cout << "\n=== High-level API ===\n";
   RUN_TEST(test_converter_parse_serialize);
