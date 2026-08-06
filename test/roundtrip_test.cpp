@@ -2112,6 +2112,11 @@ bool test_eif_sniff_rejects_non_eif() {
   bad_dtml[1] = 0x80;
   ASSERT_TRUE(!is_ok(eif::parse(bad_dtml.data(), bad_dtml.size())));
 
+  // Right size, but the unused bit 5 set in a $50 (AR|RS) byte.
+  std::vector<uint8_t> bad_arrs(29, 0);
+  bad_arrs[9] = 0x20;
+  ASSERT_TRUE(!is_ok(eif::parse(bad_arrs.data(), bad_arrs.size())));
+
   // Right size, but TL out of 7-bit range.
   std::vector<uint8_t> bad_tl(29, 0);
   bad_tl[5] = 0x80;
@@ -2326,19 +2331,13 @@ bool test_vgm_no_instruments_warns() {
   return true;
 }
 
-bool test_vgm_vgz_gzip() {
-  // Gzip-wrap the basic VGM (with an FNAME field to exercise header
-  // skipping) and expect the same extraction result.
-  std::vector<uint8_t> c;
-  c.insert(c.end(), {0x52, 0x22, 0x0B});
-  emit_test_patch(c, 0, 0);
-  c.insert(c.end(), {0x52, 0x28, 0xF0});
-  auto plain = make_vgm(c);
-
+/// Gzip-wrap a buffer (with an FNAME field to exercise header skipping).
+static std::vector<uint8_t> gzip_wrap(const std::vector<uint8_t> &plain) {
   size_t def_len = 0;
   void *def = tdefl_compress_mem_to_heap(plain.data(), plain.size(), &def_len,
                                          128 /* max probes */);
-  ASSERT_TRUE(def != nullptr);
+  if (!def)
+    return {};
 
   std::vector<uint8_t> gz = {0x1F, 0x8B, 0x08, 0x08, 0, 0, 0, 0, 0x00, 0xFF};
   const char *fname = "test.vgm";
@@ -2352,6 +2351,16 @@ bool test_vgm_vgz_gzip() {
   for (uint32_t v32 : {crc, isize})
     for (int b = 0; b < 4; ++b)
       gz.push_back((v32 >> (b * 8)) & 0xFF);
+  return gz;
+}
+
+bool test_vgm_vgz_gzip() {
+  std::vector<uint8_t> c;
+  c.insert(c.end(), {0x52, 0x22, 0x0B});
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto gz = gzip_wrap(make_vgm(c));
+  ASSERT_TRUE(!gz.empty());
 
   auto result = vgm::parse(gz.data(), gz.size(), "gz");
   ASSERT_TRUE(is_ok(result));
@@ -2359,6 +2368,116 @@ bool test_vgm_vgz_gzip() {
   ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
   ASSERT_EQ(ok.patches[0].algorithm, 2);
   ASSERT_TRUE(ok.patches[0].lfo_enable);
+  return true;
+}
+
+bool test_vgm_vgz_rejects_corrupt() {
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto plain = make_vgm(c);
+  auto gz = gzip_wrap(plain);
+  ASSERT_TRUE(!gz.empty());
+
+  // Bit-flip in the deflate payload: inflate or the CRC32 check fails.
+  auto corrupt = gz;
+  corrupt[corrupt.size() / 2] ^= 0xFF;
+  ASSERT_TRUE(!is_ok(vgm::parse(corrupt.data(), corrupt.size(), "x")));
+
+  // Reserved FLG bit set: RFC 1952 requires rejection.
+  auto reserved = gz;
+  reserved[3] |= 0x20;
+  ASSERT_TRUE(!is_ok(vgm::parse(reserved.data(), reserved.size(), "x")));
+
+  // Trailer claims a bomb-sized output: rejected by the inflate cap.
+  auto bomb = gz;
+  bomb[bomb.size() - 4] = 0xFF;
+  bomb[bomb.size() - 3] = 0xFF;
+  bomb[bomb.size() - 2] = 0xFF;
+  bomb[bomb.size() - 1] = 0xFF;
+  ASSERT_TRUE(!is_ok(vgm::parse(bomb.data(), bomb.size(), "x")));
+  return true;
+}
+
+bool test_vgm_second_chip_data_block() {
+  // A data block for the second chip sets bit 31 of the size (VGM
+  // 1.51+); the flag must be masked off, not treated as a ~2GB block.
+  std::vector<uint8_t> c;
+  c.insert(c.end(), {0x67, 0x66, 0x00, 0x04, 0x00, 0x00, 0x80, // size bit31
+                     0xDE, 0xAD, 0xBE, 0xEF});                 // 4 data bytes
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "dual");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+  ASSERT_EQ(ok.patches[0].algorithm, 2);
+  return true;
+}
+
+bool test_vgm_rejects_bad_data_offset() {
+  // A relative data offset that lands inside the 0x40-byte header must
+  // be rejected, not scanned as commands.
+  std::vector<uint8_t> c = {0x52, 0x28, 0xF0};
+  auto v = make_vgm(c);
+  v[0x34] = 0x04; // data start would be 0x38, inside the header
+  ASSERT_TRUE(!is_ok(vgm::parse(v.data(), v.size(), "x")));
+  return true;
+}
+
+bool test_vgm_lfo_captured_on_rekey() {
+  // First key-on with the LFO off, then the same state re-keyed with
+  // the LFO on: the LFO-carrying snapshot must win.
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x28, 0xF0}); // key on, $22 still 0
+  c.insert(c.end(), {0x52, 0x28, 0x00}); // key off
+  c.insert(c.end(), {0x52, 0x22, 0x0B}); // LFO on, freq 3
+  c.insert(c.end(), {0x52, 0x28, 0xF0}); // re-key the identical state
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "lfo");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+  ASSERT_TRUE(ok.patches[0].lfo_enable);
+  ASSERT_EQ(ok.patches[0].lfo_frequency, 3);
+  return true;
+}
+
+bool test_vgm_muted_carrier_warning() {
+  // Audible-looking modulators but a fully attenuated carrier: the
+  // group is inaudible and dropped, and the warning must say so
+  // rather than claiming no key-on events happened.
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);
+  c.insert(c.end(), {0x52, 0x4C, 0x7F}); // carrier (slot 3) TL = 127
+  c.insert(c.end(), {0x52, 0x28, 0xF0});
+  auto v = make_vgm(c);
+
+  auto result = vgm::parse(v.data(), v.size(), "muted");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(0));
+  ASSERT_EQ(ok.warnings.size(), static_cast<size_t>(1));
+  ASSERT_TRUE(ok.warnings[0].find("audible") != std::string::npos);
+  return true;
+}
+
+bool test_vgm_truncated_command_warns() {
+  // A file ending mid-command (0x68 needs 11 operand bytes) must
+  // produce a truncation warning, not silent success.
+  std::vector<uint8_t> c = {0x68, 0x66, 0x00};
+  auto v = make_vgm(c); // appends 0x66; still only 4 bytes after 0x68
+  bool found = false;
+  auto result = vgm::parse(v.data(), v.size(), "trunc");
+  ASSERT_TRUE(is_ok(result));
+  for (const auto &w : get_ok(result).warnings)
+    if (w.find("truncated") != std::string::npos)
+      found = true;
+  ASSERT_TRUE(found);
   return true;
 }
 
@@ -2476,6 +2595,12 @@ int main() {
   RUN_TEST(test_vgm_silent_dac_and_invalid_channels);
   RUN_TEST(test_vgm_no_instruments_warns);
   RUN_TEST(test_vgm_vgz_gzip);
+  RUN_TEST(test_vgm_vgz_rejects_corrupt);
+  RUN_TEST(test_vgm_second_chip_data_block);
+  RUN_TEST(test_vgm_rejects_bad_data_offset);
+  RUN_TEST(test_vgm_lfo_captured_on_rekey);
+  RUN_TEST(test_vgm_muted_carrier_warning);
+  RUN_TEST(test_vgm_truncated_command_warns);
   RUN_TEST(test_vgm_via_high_level);
 
   std::cout << "\n=== High-level API ===\n";

@@ -7,6 +7,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -243,6 +244,16 @@ int cmd_info(const std::vector<fs::path> &input_paths, bool json_output) {
       }
     }
 
+    if (ok.patches.empty()) {
+      if (json_output) {
+        all_warnings.push_back(filename + ": no patches found");
+      } else {
+        std::cerr << "Error: no patches found in " << input_path << "\n";
+      }
+      ++errors;
+      continue;
+    }
+
     if (json_output) {
       for (const auto &patch : ok.patches)
         all_patches.push_back(patch_to_json(patch, filename));
@@ -304,7 +315,13 @@ int cmd_convert(const fs::path &input_path, const fs::path &output_path,
     auto ext = output_path.extension().string();
     // e.g. -o ./sample/output.fui  →  directory = ./sample/output/
     auto out_dir = output_path.parent_path() / output_path.stem();
-    fs::create_directories(out_dir);
+    std::error_code ec;
+    fs::create_directories(out_dir, ec);
+    if (ec || !fs::is_directory(out_dir)) {
+      std::cerr << "Error: could not create output directory " << out_dir
+                << (ec ? ": " + ec.message() : "") << "\n";
+      return 1;
+    }
 
     int errors = 0;
     for (size_t i = 0; i < ok.patches.size(); ++i) {

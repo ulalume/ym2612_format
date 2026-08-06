@@ -10,10 +10,9 @@
 #include <array>
 #include <cstdio>
 #include <cstring>
-#include <memory>
 #include <string>
 #include <type_traits>
-#include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #include <miniz.h>
@@ -22,24 +21,35 @@ namespace ym2612_format::vgm {
 
 namespace {
 
+uint32_t rd32(const uint8_t *d) {
+  return static_cast<uint32_t>(d[0]) | (static_cast<uint32_t>(d[1]) << 8) |
+         (static_cast<uint32_t>(d[2]) << 16) |
+         (static_cast<uint32_t>(d[3]) << 24);
+}
+
 // ---- VGZ (gzip) decompression ----
+
+/// Refuse to inflate anything claiming to be larger than this.  Real
+/// VGMs decompress to a few tens of MB at most; the cap keeps a
+/// crafted decompression bomb from exhausting memory (which on the
+/// wasm32 build would abort the whole module).
+constexpr uint32_t kMaxInflatedSize = 256u << 20; // 256 MB
 
 bool is_gzip(const uint8_t *data, size_t size) {
   return size >= 2 && data[0] == 0x1F && data[1] == 0x8B;
 }
 
-/// Owning buffer for inflated VGZ data (freed with mz_free).
-struct Inflated {
-  std::unique_ptr<uint8_t[], void (*)(void *)> data{nullptr, mz_free};
-  size_t size = 0;
-};
-
 /// Decompress an RFC 1952 gzip stream via miniz raw inflate.
-/// Returns an empty buffer on failure.
-Inflated gunzip(const uint8_t *data, size_t size) {
+/// The trailer's ISIZE sizes the output buffer exactly (bounding a
+/// decompression bomb via kMaxInflatedSize) and its CRC32 is verified,
+/// so corrupt data fails cleanly instead of parsing as garbage.
+/// Returns an empty vector on failure.
+std::vector<uint8_t> gunzip(const uint8_t *data, size_t size) {
   if (size < 18 || data[2] != 8) // 8 = DEFLATE compression method
     return {};
   uint8_t flags = data[3];
+  if (flags & 0xE0) // reserved FLG bits (RFC 1952 §2.3.1.2)
+    return {};
   size_t pos = 10; // fixed header
   if (flags & 0x04) { // FEXTRA
     if (pos + 2 > size)
@@ -58,18 +68,23 @@ Inflated gunzip(const uint8_t *data, size_t size) {
   }
   if (flags & 0x02) // FHCRC
     pos += 2;
-  if (pos >= size)
+  if (pos + 8 >= size) // need deflate data plus the 8-byte trailer
     return {};
 
-  size_t out_len = 0;
-  void *out = tinfl_decompress_mem_to_heap(data + pos, size - pos, &out_len,
-                                           0 /* raw deflate */);
-  if (!out)
+  uint32_t want_crc = rd32(data + size - 8);
+  uint32_t want_size = rd32(data + size - 4);
+  if (want_size > kMaxInflatedSize)
     return {};
-  Inflated result;
-  result.data.reset(static_cast<uint8_t *>(out));
-  result.size = out_len;
-  return result;
+
+  std::vector<uint8_t> out(want_size);
+  size_t got = tinfl_decompress_mem_to_mem(out.data(), out.size(), data + pos,
+                                           size - pos - 8, 0 /* raw deflate */);
+  if (got != want_size) // includes TINFL_DECOMPRESS_MEM_TO_MEM_FAILED
+    return {};
+  if (static_cast<uint32_t>(
+          mz_crc32(MZ_CRC32_INIT, out.data(), out.size())) != want_crc)
+    return {};
+  return out;
 }
 
 // ---- YM2612 shadow state ----
@@ -231,15 +246,22 @@ private:
     const ChannelState &s = ch_[ch];
     if (is_silent(s))
       return;
-    if (seen_.insert(state_key(s)).second)
+    auto [it, inserted] = seen_.try_emplace(state_key(s), collected_.size());
+    if (inserted) {
       collected_.push_back({s, lfo_});
+    } else if ((lfo_ & 0x08) && !(collected_[it->second].lfo & 0x08)) {
+      // Same state re-keyed with the LFO now enabled (e.g. an init
+      // key-on before the driver turns the LFO on): prefer the
+      // LFO-carrying snapshot so the patch's FMS/AMS stay meaningful.
+      collected_[it->second].lfo = lfo_;
+    }
   }
 
   std::array<ChannelState, 6> ch_{};
   bool dac_on_ = false;
   uint8_t lfo_ = 0;
   std::vector<Snapshot> collected_;
-  std::unordered_set<std::string> seen_; ///< keys of collected_ states
+  std::unordered_map<std::string, size_t> seen_; ///< state key → collected_ index
 };
 
 /// Group snapshots that are the same instrument at different volumes
@@ -310,19 +332,13 @@ Patch to_patch(const Snapshot &s, std::string name) {
 
 // ---- VGM command stream ----
 
-uint32_t rd32(const uint8_t *d) {
-  return static_cast<uint32_t>(d[0]) | (static_cast<uint32_t>(d[1]) << 8) |
-         (static_cast<uint32_t>(d[2]) << 16) |
-         (static_cast<uint32_t>(d[3]) << 24);
-}
-
 /// Operand byte count for commands other than the specially-handled
 /// 0x52/0x53/0x66/0x67/0x68.  Returns -1 for undefined commands.
 int operand_length(uint8_t cmd, uint32_t version) {
   if (cmd >= 0x30 && cmd <= 0x3F)
     return 1; // reserved, one operand
   if (cmd >= 0x40 && cmd <= 0x4E)
-    return version >= 0x160 ? 2 : 1; // reserved
+    return version >= 0x161 ? 2 : 1; // reserved; grew to 2 operands in 1.61
   if (cmd == 0x4F || cmd == 0x50)
     return 1; // Game Gear stereo / PSG
   if (cmd >= 0x51 && cmd <= 0x5F)
@@ -366,28 +382,33 @@ ParseResult parse(const uint8_t *data, size_t size,
   if (!data || size == 0)
     return Error{"Empty data"};
 
-  Inflated inflated;
+  std::vector<uint8_t> decompressed;
   const uint8_t *d = data;
   size_t n = size;
   if (is_gzip(data, size)) {
-    inflated = gunzip(data, size);
-    if (!inflated.data)
+    decompressed = gunzip(data, size);
+    if (decompressed.empty())
       return Error{"Failed to decompress VGZ (gzip) data"};
-    d = inflated.data.get();
-    n = inflated.size;
+    d = decompressed.data();
+    n = decompressed.size();
   }
 
   if (n < 0x40 || std::memcmp(d, "Vgm ", 4) != 0)
     return Error{"Not a VGM file (missing 'Vgm ' magic)"};
 
   uint32_t version = rd32(d + 0x08);
-  size_t pos = 0x40;
+  // The v1.50+ data offset is relative to its own field at 0x34.
+  // Validate in 64 bits (a corrupt value must not wrap size_t on
+  // 32-bit targets) and reject offsets landing inside the header.
+  uint64_t data_start = 0x40;
   if (version >= 0x150) {
     uint32_t rel = rd32(d + 0x34);
-    pos = rel ? 0x34 + static_cast<size_t>(rel) : 0x40;
+    if (rel)
+      data_start = 0x34 + static_cast<uint64_t>(rel);
   }
-  if (pos >= n)
+  if (data_start < 0x40 || data_start >= n)
     return Error{"VGM data offset out of bounds"};
+  size_t pos = static_cast<size_t>(data_start);
 
   std::vector<std::string> warnings;
   Ym2612Tracker tracker;
@@ -402,7 +423,8 @@ ParseResult parse(const uint8_t *data, size_t size,
         warnings.push_back("VGM data truncated mid-command");
         break;
       }
-      uint64_t block_size = rd32(d + pos + 2);
+      // Bit 31 of the size is the second-chip flag (VGM 1.51+).
+      uint64_t block_size = rd32(d + pos + 2) & 0x7FFFFFFF;
       if (pos + 6 + block_size > n) {
         warnings.push_back("VGM data block runs past end of file");
         break;
@@ -436,8 +458,13 @@ ParseResult parse(const uint8_t *data, size_t size,
   for (size_t i = 0; i < picked.size(); ++i)
     patches.push_back(to_patch(picked[i], base + "_" + std::to_string(i)));
 
-  if (patches.empty())
-    warnings.push_back("No YM2612 instruments found (no FM key-on events)");
+  if (patches.empty()) {
+    if (tracker.snapshots().empty())
+      warnings.push_back("No YM2612 instruments found (no FM key-on events)");
+    else
+      warnings.push_back("No audible YM2612 instruments found (every "
+                         "captured state has all carrier operators muted)");
+  }
 
   return ParseOk{std::move(patches), std::move(warnings)};
 }

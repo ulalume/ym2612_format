@@ -21,9 +21,10 @@ bool looks_like_eif(const uint8_t *data, size_t size) {
   for (int op = 0; op < 4; ++op) {
     if (data[1 + op] & 0x80)  return false; // $30: MUL | DT<<4, bit7 unused
     if (data[5 + op] > 0x7F)  return false; // $40: TL is 7 bits
-    // $50 (AR | RS<<6) and $80 (RR | SL<<4) use all 8 bits — no check.
+    if (data[9 + op] & 0x20)  return false; // $50: AR | RS<<6, bit5 unused
     if (data[13 + op] & 0x60) return false; // $60: DR | AM<<7, bits 5-6 unused
     if (data[17 + op] > 0x1F) return false; // $70: SR is 5 bits
+    // $80 (RR | SL<<4) uses all 8 bits — nothing to check.
     if (data[25 + op] > 0x0F) return false; // $90: SSG-EG is 4 bits
   }
   return true;

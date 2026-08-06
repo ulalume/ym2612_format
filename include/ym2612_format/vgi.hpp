@@ -34,7 +34,9 @@ namespace ym2612_format::vgi {
 ///
 ///   +0 MUL (0-15)
 ///   +1 Detune (0..3..6 linear = -3..0..+3; converted via
-///              detune_from_linear / detune_to_linear)
+///              detune_from_linear / detune_to_linear.  An out-of-spec
+///              7 is accepted and clamped to +3, matching the TFI
+///              convention)
 ///   +2 TL  (0-127)
 ///   +3 RS  (0-3, aka KS)
 ///   +4 AR  (0-31)

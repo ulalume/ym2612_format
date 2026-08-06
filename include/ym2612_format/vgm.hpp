@@ -27,17 +27,23 @@ namespace ym2612_format::vgm {
 ///      they change with musical expression.
 ///
 /// The global LFO register ($22) is captured at key-on into
-/// lfo_enable / lfo_frequency.  Panning ($B4 bits 6-7) is performance
-/// data and is normalized to L=R=on.
+/// lfo_enable / lfo_frequency; if the same state is later re-keyed
+/// with the LFO enabled, the LFO-carrying snapshot wins.  Panning
+/// ($B4 bits 6-7) is performance data and is normalized to L=R=on.
 ///
 /// Limitations inherent to the source format:
 ///
 ///   - Only instruments actually played appear in the output.
 ///   - Carrier TL reflects the loudest volume heard in the song.
+///   - States whose carrier operators are all fully attenuated
+///     (TL=127) are inaudible and dropped.
 ///   - Software envelopes/effects performed via register rewrites are
 ///     not reconstructed (no macros are generated).
 ///   - Note frequencies ($A0-$AF) and DAC samples are discarded.
 ///   - Only the first YM2612 of a dual-chip VGM is scanned.
+///   - An undefined command byte stops the scan with a warning
+///     (continuing would desync and fabricate garbage patches);
+///     instruments keyed before that point are still returned.
 ///
 /// Patches are named "<name>_<index>" in order of first appearance.
 /// VGZ (gzip-compressed VGM) is decompressed transparently.
