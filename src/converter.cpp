@@ -3,6 +3,7 @@
 #include "ym2612_format/ctrmml.hpp"
 #include "ym2612_format/dmf.hpp"
 #include "ym2612_format/dmp.hpp"
+#include "ym2612_format/eif.hpp"
 #include "ym2612_format/fui.hpp"
 #include "ym2612_format/fur.hpp"
 #include "ym2612_format/gin.hpp"
@@ -10,6 +11,8 @@
 #include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
 #include "ym2612_format/tfi.hpp"
+#include "ym2612_format/vgi.hpp"
+#include "ym2612_format/vgm.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -33,6 +36,10 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"fur", Format::Fur},
       {"opm", Format::Opm},
       {"tfi", Format::Tfi},
+      {"vgi", Format::Vgi},
+      {"eif", Format::Eif},
+      {"vgm", Format::Vgm},
+      {"vgz", Format::Vgm},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -52,6 +59,9 @@ const char *format_to_extension(Format f) {
   case Format::Fur:     return "fur";
   case Format::Opm:     return "opm";
   case Format::Tfi:     return "tfi";
+  case Format::Vgi:     return "vgi";
+  case Format::Eif:     return "eif";
+  case Format::Vgm:     return "vgm";
   }
   return "";
 }
@@ -75,34 +85,40 @@ SerializeTextResult ctrmml_serialize_text_wrapper(const Patch &p) {
   return ctrmml::serialize_text(p);
 }
 
-FormatInfo make_info(Format f,
-                     const char *name, const char *ext,
-                     bool read, bool write, bool text = false) {
-  return {f, name, ext, read, write, text};
+/// Build a registry entry from a module's info().  The capability
+/// flags are derived from what is actually wired here, so the listing
+/// can never disagree with what parse_as()/serialize() will accept.
+FormatEntry make_entry(FormatInfo info,
+                       ParseResult (*parse)(const uint8_t *, size_t,
+                                            const std::string &),
+                       SerializeResult (*serialize)(const Patch &),
+                       SerializeTextResult (*serialize_text)(const Patch &)) {
+  info.can_read = parse != nullptr;
+  info.can_write = serialize != nullptr;
+  return {std::move(info), parse, serialize, serialize_text};
 }
 
 const std::vector<FormatEntry> &formats() {
+  // Ordering rule for hint-less auto-detection: entries with magic
+  // bytes come first, magic-less size/range-validated sniffers (tfi,
+  // vgi, eif, dmp) after them.  Dmp stays last as the loosest of the
+  // magic-less sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
-      {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
-       dmp::parse, dmp::serialize, nullptr},
-      {make_info(Format::Dmf, "DefleMask Module", "dmf", true, false),
-       dmf::parse, nullptr, nullptr},
-      {make_info(Format::Fui, "Furnace Instrument", "fui", true, true),
-       fui::parse, fui::serialize, nullptr},
-      {make_info(Format::Gin, "GIN (JSON)", "gin", true, true),
-       gin::parse, gin::serialize, nullptr},
-      {make_info(Format::Ginpkg, "GINPKG (ZIP)", "ginpkg", true, false),
-       ginpkg::parse, nullptr, nullptr},
-      {make_info(Format::Rym2612, "RYM2612 Preset", "rym2612", true, false),
-       rym2612::parse, nullptr, nullptr},
-      {make_info(Format::Mml, "ctrmml (MML)", "mml", true, true, true),
-       ctrmml::parse, ctrmml_serialize_wrapper, ctrmml_serialize_text_wrapper},
-      {make_info(Format::Fur, "Furnace Module", "fur", true, false),
-       fur::parse, nullptr, nullptr},
-      {make_info(Format::Opm, "VOPM/MiOPMdrv", "opm", true, false, true),
-       opm::parse, nullptr, nullptr},
-      {make_info(Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true),
-       tfi::parse, tfi::serialize, nullptr},
+      make_entry(vgm::info(), vgm::parse, nullptr, nullptr),
+      make_entry(dmf::info(), dmf::parse, nullptr, nullptr),
+      make_entry(fui::info(), fui::parse, fui::serialize, nullptr),
+      make_entry(gin::info(), gin::parse, gin::serialize, nullptr),
+      make_entry(ginpkg::info(), ginpkg::parse, nullptr, nullptr),
+      make_entry(rym2612::info(), rym2612::parse, nullptr, nullptr),
+      make_entry(ctrmml::info(), ctrmml::parse, ctrmml_serialize_wrapper,
+                 ctrmml_serialize_text_wrapper),
+      make_entry(fur::info(), fur::parse, nullptr, nullptr),
+      make_entry(opm::info(), opm::parse, nullptr, nullptr),
+      make_entry(tfi::info(), tfi::parse, tfi::serialize, nullptr),
+      make_entry(vgi::info(), vgi::parse, vgi::serialize, nullptr),
+      make_entry(eif::info(), eif::parse, eif::serialize, nullptr),
+      // Loosest magic-less sniffer — stays last (see ordering rule).
+      make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr),
   };
   return entries;
 }
@@ -132,21 +148,30 @@ ParseResult parse(const uint8_t *data, size_t size,
     return Error{"Empty data"};
 
   // Try the hinted format first
+  std::optional<Error> hint_error;
   if (hint) {
     if (auto *entry = find_entry(*hint)) {
       auto result = entry->parse(data, size, name);
       if (is_ok(result))
         return result;
+      hint_error = get_error(result);
     }
   }
 
-  // Try all formats
+  // Try all formats (the hinted one already failed above — skip it)
   for (const auto &entry : formats()) {
+    if (hint && entry.info.format == *hint)
+      continue;
     auto result = entry.parse(data, size, name);
     if (is_ok(result))
       return result;
   }
 
+  // Nothing matched: the hinted format's own error is more useful
+  // than the generic message (e.g. a corrupt .vgz reports its
+  // decompression failure).
+  if (hint_error)
+    return *hint_error;
   return Error{"Unable to detect format"};
 }
 

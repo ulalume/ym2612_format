@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(ym2612_format VERSION 0.1.1 LANGUAGES CXX)
+project(ym2612_format VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -44,6 +44,9 @@ add_library(ym2612_format STATIC
   src/ctrmml.cpp
   src/opm.cpp
   src/tfi.cpp
+  src/vgi.cpp
+  src/eif.cpp
+  src/vgm.cpp
   src/converter.cpp
 )
 

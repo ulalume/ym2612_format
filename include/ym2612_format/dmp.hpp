@@ -9,7 +9,14 @@ namespace ym2612_format::dmp {
 /// DefleMask Preset (.dmp) format for YM2612 FM instruments.
 ///
 /// Binary format: 7-byte header + 4 operators × 11 bytes = 51 bytes.
-/// Supports version 0x09 (legacy) and 0x0B (modern).
+/// Supports version 0x09 (legacy) and 0x0B (modern, DefleMask's final
+/// format); older versions parse best-effort with a warning, newer are
+/// rejected.  There is no magic, so the sniff is the exact FM size
+/// plus full field range validation: non-FM (STD) presets, size
+/// mismatches, and out-of-range fields are rejected rather than
+/// parsed as garbage.  Non-Genesis FM systems (e.g. Arcade/YM2151)
+/// import best-effort with a warning.  A 49-byte headerless variant
+/// (three leading zero bytes) is repaired heuristically.
 
 FormatInfo info();
 

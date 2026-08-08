@@ -53,6 +53,23 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
     return Error{"DMP data too small to contain a header"};
   }
 
+  // DefleMask's final preset format is version 0x0B; anything newer is
+  // unknown and rejected rather than best-effort mis-parsed.
+  if (bytes[0] > 0x0B) {
+    return Error{"Unsupported DMP version " + std::to_string(bytes[0])};
+  }
+
+  // A DMP file has no magic, so the sniff is the fixed FM size plus
+  // the field range checks below.  Anything else is foreign data —
+  // this parser sits last in the format registry as the loosest
+  // sniffer, so leniency here would turn arbitrary bytes into garbage
+  // patches during hint-less auto-detection.
+  if (bytes.size() != expected_size) {
+    return Error{"DMP size mismatch (expected " +
+                 std::to_string(expected_size) + " bytes for an FM preset, "
+                 "got " + std::to_string(bytes.size()) + ")"};
+  }
+
   struct HeaderLayout {
     size_t instrument_mode_idx;
     size_t system_idx;
@@ -88,23 +105,20 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
   uint8_t lfo_ams =
       safe_read(bytes.data(), bytes.size(), layout->ams_idx);
 
-  if (bytes.size() < expected_size) {
-    warnings.push_back("DMP data shorter than expected (" +
-                        std::to_string(bytes.size()) + " < " +
-                        std::to_string(expected_size) +
-                        "), padding with zeros");
+  if (instrument_mode != 1) {
+    return Error{"DMP instrument mode is not FM (" +
+                 std::to_string(instrument_mode) + ")"};
+  }
+
+  if (lfo_fms > 0x07 || feedback_val > 0x07 || algorithm_val > 0x07 ||
+      lfo_ams > 0x03) {
+    return Error{"DMP header fields out of range"};
   }
 
   if (!(system == 0x02 ||
         (file_version <= 0x09 && (system == 0x00 || system == 0x01)))) {
     warnings.push_back("Unsupported DMP system code: " +
                         std::to_string(system));
-  }
-
-  if (instrument_mode != 1) {
-    warnings.push_back("Instrument mode is not FM (" +
-                        std::to_string(instrument_mode) +
-                        "), parsing as FM anyway");
   }
 
   Patch patch;
@@ -134,6 +148,14 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
     uint8_t dt = safe_read(bytes.data(), bytes.size(), base + 8);
     uint8_t d2r = safe_read(bytes.data(), bytes.size(), base + 9);
     uint8_t ssgeg = safe_read(bytes.data(), bytes.size(), base + 10);
+
+    // Reject out-of-range operator data (foreign bytes).  DT allows up
+    // to 0x37: Arcade (YM2151) presets pack DT2<<4 into the same byte.
+    if (mult > 0x0F || tl > 0x7F || ar > 0x1F || dr > 0x1F || sl > 0x0F ||
+        rr > 0x0F || am_val > 0x01 || rs > 0x03 || dt > 0x37 ||
+        d2r > 0x1F || ssgeg > 0x0F) {
+      return Error{"DMP operator fields out of range"};
+    }
 
     o.ml = mult & 0x0F;
     o.tl = tl & 0x7F;
