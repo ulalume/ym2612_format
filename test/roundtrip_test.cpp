@@ -1850,6 +1850,84 @@ bool test_tfi_via_high_level() {
   return true;
 }
 
+// ---- DMP sniffing tests ----
+
+/// Synthesize a valid 51-byte v11 Genesis FM preset.
+static std::vector<uint8_t> make_dmp() {
+  std::vector<uint8_t> b = {0x0B, 0x02, 0x01,  // version, Genesis, FM
+                            0x02, 0x05, 0x03, 0x01}; // fms fb alg ams
+  for (int op = 0; op < 4; ++op) {
+    // MULT TL AR DR SL RR AM RS DT D2R SSGEG
+    const uint8_t opb[11] = {1, 20, 31, 5, 2, 7, 0, 1, 3, 4, 0};
+    b.insert(b.end(), opb, opb + 11);
+  }
+  return b;
+}
+
+bool test_dmp_sniff_rejects_non_dmp() {
+  // Wrong size — reject instead of padding/truncating.
+  std::vector<uint8_t> short_data(45, 0);
+  ASSERT_TRUE(!is_ok(dmp::parse(short_data.data(), short_data.size())));
+  std::vector<uint8_t> long_data(200, 0x41);
+  ASSERT_TRUE(!is_ok(dmp::parse(long_data.data(), long_data.size())));
+
+  // Unknown future version.
+  auto v12 = make_dmp();
+  v12[0] = 0x0C;
+  ASSERT_TRUE(!is_ok(dmp::parse(v12.data(), v12.size())));
+
+  // STD (non-FM) instrument mode.
+  auto std_mode = make_dmp();
+  std_mode[2] = 0x00;
+  ASSERT_TRUE(!is_ok(dmp::parse(std_mode.data(), std_mode.size())));
+
+  // Out-of-range fields.
+  auto bad_tl = make_dmp();
+  bad_tl[7 + 1] = 0x80; // OP0 TL
+  ASSERT_TRUE(!is_ok(dmp::parse(bad_tl.data(), bad_tl.size())));
+  auto bad_alg = make_dmp();
+  bad_alg[5] = 0x08; // algorithm
+  ASSERT_TRUE(!is_ok(dmp::parse(bad_alg.data(), bad_alg.size())));
+
+  // Hint-less auto-detection must no longer turn arbitrary bytes into
+  // a DMP patch: a corrupt gzip fragment now fails as a whole.
+  std::vector<uint8_t> junk = {0x1F, 0x8B, 0x08, 0x00};
+  for (int i = 0; i < 196; ++i)
+    junk.push_back(static_cast<uint8_t>(i * 37 + 11));
+  ASSERT_TRUE(!is_ok(parse(junk.data(), junk.size())));
+  return true;
+}
+
+bool test_dmp_accepts_valid_and_best_effort() {
+  // The synthesized modern preset parses cleanly.
+  auto good = make_dmp();
+  auto r = dmp::parse(good.data(), good.size(), "good");
+  ASSERT_TRUE(is_ok(r));
+  ASSERT_EQ(get_ok(r).patches[0].algorithm, 3);
+  ASSERT_TRUE(get_ok(r).warnings.empty());
+
+  // vgm2pre-style version 7 file: best-effort with a version warning.
+  auto v7 = make_dmp();
+  v7[0] = 0x07;
+  v7[1] = 0x01; // old "type" byte; allowed as a system code for v<=9
+  auto r7 = dmp::parse(v7.data(), v7.size(), "v7");
+  ASSERT_TRUE(is_ok(r7));
+  ASSERT_TRUE(!get_ok(r7).warnings.empty());
+
+  // 49-byte headerless variant: repaired heuristically.
+  std::vector<uint8_t> headerless = {0x00, 0x00, 0x00, 0x06, 0x02};
+  for (int op = 0; op < 4; ++op) {
+    const uint8_t opb[11] = {1, 20, 31, 5, 2, 7, 0, 1, 3, 4, 0};
+    headerless.insert(headerless.end(), opb, opb + 11);
+  }
+  ASSERT_EQ(headerless.size(), static_cast<size_t>(49));
+  auto rr = dmp::parse(headerless.data(), headerless.size(), "fixed");
+  ASSERT_TRUE(is_ok(rr));
+  ASSERT_EQ(get_ok(rr).patches[0].algorithm, 6);
+  ASSERT_TRUE(!get_ok(rr).warnings.empty());
+  return true;
+}
+
 // ---- VGI parse/serialize tests ----
 
 bool test_vgi_parse_synthesized() {
@@ -2523,6 +2601,10 @@ int main() {
 
   std::cout << "\n=== DMP roundtrip ===\n";
   RUN_TEST(test_dmp_roundtrip);
+
+  std::cout << "\n=== DMP sniffing ===\n";
+  RUN_TEST(test_dmp_sniff_rejects_non_dmp);
+  RUN_TEST(test_dmp_accepts_valid_and_best_effort);
 
   std::cout << "\n=== Cross-format roundtrip ===\n";
   RUN_TEST(test_dmp_to_fui_roundtrip);

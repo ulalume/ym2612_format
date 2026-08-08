@@ -92,11 +92,10 @@ FormatInfo make_info(Format f,
 }
 
 const std::vector<FormatEntry> &formats() {
-  // Ordering rule for hint-less auto-detection: every entry except Dmp
-  // rejects foreign data (magic bytes or strict size/range sniffing),
-  // so the lenient DMP parser — which accepts any buffer >= 7 bytes
-  // with warnings only — must come LAST or it shadows the strict
-  // sniffers.  Keep new formats above it.
+  // Ordering rule for hint-less auto-detection: entries with magic
+  // bytes come first, magic-less size/range-validated sniffers (tfi,
+  // vgi, eif, dmp) after them.  Dmp stays last as the loosest of the
+  // magic-less sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
       {make_info(Format::Vgm, "VGM/VGZ register log", "vgm", true, false),
        vgm::parse, nullptr, nullptr},
@@ -122,7 +121,7 @@ const std::vector<FormatEntry> &formats() {
        vgi::parse, vgi::serialize, nullptr},
       {make_info(Format::Eif, "Echo (EIF)", "eif", true, true),
        eif::parse, eif::serialize, nullptr},
-      // Lenient catch-all — must stay last (see ordering rule above).
+      // Loosest magic-less sniffer — stays last (see ordering rule).
       {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
        dmp::parse, dmp::serialize, nullptr},
   };
@@ -154,11 +153,13 @@ ParseResult parse(const uint8_t *data, size_t size,
     return Error{"Empty data"};
 
   // Try the hinted format first
+  std::optional<Error> hint_error;
   if (hint) {
     if (auto *entry = find_entry(*hint)) {
       auto result = entry->parse(data, size, name);
       if (is_ok(result))
         return result;
+      hint_error = get_error(result);
     }
   }
 
@@ -171,6 +172,11 @@ ParseResult parse(const uint8_t *data, size_t size,
       return result;
   }
 
+  // Nothing matched: the hinted format's own error is more useful
+  // than the generic message (e.g. a corrupt .vgz reports its
+  // decompression failure).
+  if (hint_error)
+    return *hint_error;
   return Error{"Unable to detect format"};
 }
 
