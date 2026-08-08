@@ -85,10 +85,17 @@ SerializeTextResult ctrmml_serialize_text_wrapper(const Patch &p) {
   return ctrmml::serialize_text(p);
 }
 
-FormatInfo make_info(Format f,
-                     const char *name, const char *ext,
-                     bool read, bool write, bool text = false) {
-  return {f, name, ext, read, write, text};
+/// Build a registry entry from a module's info().  The capability
+/// flags are derived from what is actually wired here, so the listing
+/// can never disagree with what parse_as()/serialize() will accept.
+FormatEntry make_entry(FormatInfo info,
+                       ParseResult (*parse)(const uint8_t *, size_t,
+                                            const std::string &),
+                       SerializeResult (*serialize)(const Patch &),
+                       SerializeTextResult (*serialize_text)(const Patch &)) {
+  info.can_read = parse != nullptr;
+  info.can_write = serialize != nullptr;
+  return {std::move(info), parse, serialize, serialize_text};
 }
 
 const std::vector<FormatEntry> &formats() {
@@ -97,33 +104,21 @@ const std::vector<FormatEntry> &formats() {
   // vgi, eif, dmp) after them.  Dmp stays last as the loosest of the
   // magic-less sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
-      {make_info(Format::Vgm, "VGM/VGZ register log", "vgm", true, false),
-       vgm::parse, nullptr, nullptr},
-      {make_info(Format::Dmf, "DefleMask Module", "dmf", true, false),
-       dmf::parse, nullptr, nullptr},
-      {make_info(Format::Fui, "Furnace Instrument", "fui", true, true),
-       fui::parse, fui::serialize, nullptr},
-      {make_info(Format::Gin, "GIN (JSON)", "gin", true, true),
-       gin::parse, gin::serialize, nullptr},
-      {make_info(Format::Ginpkg, "GINPKG (ZIP)", "ginpkg", true, false),
-       ginpkg::parse, nullptr, nullptr},
-      {make_info(Format::Rym2612, "RYM2612 Preset", "rym2612", true, false),
-       rym2612::parse, nullptr, nullptr},
-      {make_info(Format::Mml, "ctrmml (MML)", "mml", true, true, true),
-       ctrmml::parse, ctrmml_serialize_wrapper, ctrmml_serialize_text_wrapper},
-      {make_info(Format::Fur, "Furnace Module", "fur", true, false),
-       fur::parse, nullptr, nullptr},
-      {make_info(Format::Opm, "VOPM/MiOPMdrv", "opm", true, false, true),
-       opm::parse, nullptr, nullptr},
-      {make_info(Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true),
-       tfi::parse, tfi::serialize, nullptr},
-      {make_info(Format::Vgi, "VGM Music Maker (VGI)", "vgi", true, true),
-       vgi::parse, vgi::serialize, nullptr},
-      {make_info(Format::Eif, "Echo (EIF)", "eif", true, true),
-       eif::parse, eif::serialize, nullptr},
+      make_entry(vgm::info(), vgm::parse, nullptr, nullptr),
+      make_entry(dmf::info(), dmf::parse, nullptr, nullptr),
+      make_entry(fui::info(), fui::parse, fui::serialize, nullptr),
+      make_entry(gin::info(), gin::parse, gin::serialize, nullptr),
+      make_entry(ginpkg::info(), ginpkg::parse, nullptr, nullptr),
+      make_entry(rym2612::info(), rym2612::parse, nullptr, nullptr),
+      make_entry(ctrmml::info(), ctrmml::parse, ctrmml_serialize_wrapper,
+                 ctrmml_serialize_text_wrapper),
+      make_entry(fur::info(), fur::parse, nullptr, nullptr),
+      make_entry(opm::info(), opm::parse, nullptr, nullptr),
+      make_entry(tfi::info(), tfi::parse, tfi::serialize, nullptr),
+      make_entry(vgi::info(), vgi::parse, vgi::serialize, nullptr),
+      make_entry(eif::info(), eif::parse, eif::serialize, nullptr),
       // Loosest magic-less sniffer — stays last (see ordering rule).
-      {make_info(Format::Dmp, "DefleMask Preset", "dmp", true, true),
-       dmp::parse, dmp::serialize, nullptr},
+      make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr),
   };
   return entries;
 }
