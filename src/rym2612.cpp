@@ -11,15 +11,18 @@ FormatInfo info() { return {Format::Rym2612, "RYM2612 Preset", "rym2612", true, 
 namespace {
 
 uint8_t convert_detune(int rym_dt) {
+  // Registers 0 and 4 are hardware-equivalent (both "zero detune"; 4 is
+  // "-0"). Register 0 is the canonical encoding used for the zero point,
+  // matching ym2612_format::detune_from_linear().
   switch (rym_dt) {
   case -3: return 7;
   case -2: return 6;
   case -1: return 5;
-  case 0:  return 4;
+  case 0:  return 0;
   case 1:  return 1;
   case 2:  return 2;
   case 3:  return 3;
-  default: return 4;
+  default: return 0;
   }
 }
 

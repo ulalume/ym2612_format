@@ -129,7 +129,7 @@ bool test_detune_linear_to_hardware() {
   ASSERT_EQ(detune_from_linear(0), 7); // -3
   ASSERT_EQ(detune_from_linear(1), 6); // -2
   ASSERT_EQ(detune_from_linear(2), 5); // -1
-  ASSERT_EQ(detune_from_linear(3), 4); // 0
+  ASSERT_EQ(detune_from_linear(3), 0); // 0
   ASSERT_EQ(detune_from_linear(4), 1); // +1
   ASSERT_EQ(detune_from_linear(5), 2); // +2
   ASSERT_EQ(detune_from_linear(6), 3); // +3
@@ -160,13 +160,14 @@ bool test_detune_roundtrip_linear() {
 
 bool test_detune_roundtrip_hardware() {
   // from_linear(to_linear(x)) should preserve meaning for hardware values 0-7
-  // Note: hardware 0 and 4 both mean "no detune" and may normalize to 4
+  // Note: hardware 0 and 4 both mean "no detune" and may normalize to 0
   for (int i = 0; i <= 7; ++i) {
     uint8_t lin = detune_to_linear(i);
     uint8_t back = detune_from_linear(lin);
-    // Hardware 0 → linear 3 → hardware 4 (both mean "no detune")
-    if (i == 0) {
-      ASSERT_EQ(back, 4);
+    // Hardware 4 → linear 3 → hardware 0 (both mean "no detune"; 0 is
+    // the canonical zero-detune register).
+    if (i == 4) {
+      ASSERT_EQ(back, 0);
     } else {
       ASSERT_EQ(back, static_cast<uint8_t>(i));
     }
@@ -174,11 +175,24 @@ bool test_detune_roundtrip_hardware() {
   return true;
 }
 
+/// Pin the canonical zero-detune register: linear input 3 (the zero point)
+/// and any out-of-range linear input must map to hardware register 0, the
+/// canonical "no detune" encoding — not the equivalent-but-non-canonical
+/// register 4 ("-0"). detune_to_linear still accepts both 0 and 4 as
+/// "no detune" when reading hardware/register-based formats.
+bool test_detune_canonical_zero() {
+  ASSERT_EQ(detune_from_linear(3), 0);
+  ASSERT_EQ(detune_from_linear(9), 0); // out-of-range input (default branch)
+  ASSERT_EQ(detune_to_linear(0), 3);
+  ASSERT_EQ(detune_to_linear(4), 3);
+  return true;
+}
+
 // ---- DMP parse tests ----
 
 /// "bright piano.dmp" — known values from raw hex analysis.
 /// DMP raw DT bytes: 4, 2, 5, 3 (linear encoding)
-/// Expected hardware DT: 1(+1), 5(-1), 2(+2), 4(0)
+/// Expected hardware DT: 1(+1), 5(-1), 2(+2), 0(0)
 bool test_dmp_parse_bright_piano() {
   auto bytes = read_file(fs::path(TEST_DATA_DIR) / "bright piano.dmp");
   ASSERT_TRUE(!bytes.empty());
@@ -215,8 +229,8 @@ bool test_dmp_parse_bright_piano() {
   ASSERT_EQ(p.operators[2].dt, 2);
   ASSERT_EQ(p.operators[2].ml, 5);
 
-  // OP4: DT_linear=3 → hw4 (0)
-  ASSERT_EQ(p.operators[3].dt, 4);
+  // OP4: DT_linear=3 → hw0 (0)
+  ASSERT_EQ(p.operators[3].dt, 0);
   ASSERT_EQ(p.operators[3].ml, 1);
 
   return true;
@@ -239,8 +253,8 @@ bool test_dmp_parse_organ() {
   ASSERT_EQ(p.operators[1].dt, 1);
   // OP3 DT_linear=5 → hw2 (+2)
   ASSERT_EQ(p.operators[2].dt, 2);
-  // OP4 DT_linear=3 → hw4 (0)
-  ASSERT_EQ(p.operators[3].dt, 4);
+  // OP4 DT_linear=3 → hw0 (0)
+  ASSERT_EQ(p.operators[3].dt, 0);
 
   return true;
 }
@@ -260,7 +274,7 @@ bool test_dmp_parse_acoustic_bass() {
   ASSERT_EQ(p.operators[0].dt, 5); // linear 2 → hw -1
   ASSERT_EQ(p.operators[1].dt, 7); // linear 0 → hw -3
   ASSERT_EQ(p.operators[2].dt, 6); // linear 1 → hw -2
-  ASSERT_EQ(p.operators[3].dt, 4); // linear 3 → hw 0
+  ASSERT_EQ(p.operators[3].dt, 0); // linear 3 → hw 0
 
   return true;
 }
@@ -399,7 +413,7 @@ bool test_dmf_parse_detune() {
   ASSERT_TRUE(patches.size() >= 10);
 
   // Find Bass_l1 — known raw DT bytes: 3, 6, 6, 3 (linear encoding)
-  // Expected hardware DT: 4(0), 3(+3), 3(+3), 4(0)
+  // Expected hardware DT: 0(0), 3(+3), 3(+3), 0(0)
   const Patch *bass_l1 = nullptr;
   const Patch *bass_l2 = nullptr;
   const Patch *bell1 = nullptr;
@@ -412,30 +426,30 @@ bool test_dmf_parse_detune() {
     if (p.name == "Brass1") brass1 = &p;
   }
 
-  // Bass_l1: raw DT [3, 6, 6, 3] → hardware [4, 3, 3, 4]
+  // Bass_l1: raw DT [3, 6, 6, 3] → hardware [0, 3, 3, 0]
   ASSERT_TRUE(bass_l1 != nullptr);
-  ASSERT_EQ(bass_l1->operators[0].dt, 4); // linear 3 → 0
+  ASSERT_EQ(bass_l1->operators[0].dt, 0); // linear 3 → 0
   ASSERT_EQ(bass_l1->operators[1].dt, 3); // linear 6 → +3
   ASSERT_EQ(bass_l1->operators[2].dt, 3); // linear 6 → +3
-  ASSERT_EQ(bass_l1->operators[3].dt, 4); // linear 3 → 0
+  ASSERT_EQ(bass_l1->operators[3].dt, 0); // linear 3 → 0
 
-  // Bass_l2: raw DT [3, 3, 3, 3] → all hardware 4 (no detune)
+  // Bass_l2: raw DT [3, 3, 3, 3] → all hardware 0 (no detune)
   ASSERT_TRUE(bass_l2 != nullptr);
   for (int i = 0; i < 4; ++i)
-    ASSERT_EQ(bass_l2->operators[i].dt, 4);
+    ASSERT_EQ(bass_l2->operators[i].dt, 0);
 
-  // Bell1: raw DT [3, 0, 6, 6] → hardware [4, 7, 3, 3]
+  // Bell1: raw DT [3, 0, 6, 6] → hardware [0, 7, 3, 3]
   ASSERT_TRUE(bell1 != nullptr);
-  ASSERT_EQ(bell1->operators[0].dt, 4); // linear 3 → 0
+  ASSERT_EQ(bell1->operators[0].dt, 0); // linear 3 → 0
   ASSERT_EQ(bell1->operators[1].dt, 7); // linear 0 → -3
   ASSERT_EQ(bell1->operators[2].dt, 3); // linear 6 → +3
   ASSERT_EQ(bell1->operators[3].dt, 3); // linear 6 → +3
 
-  // Brass1: raw DT [3, 1, 3, 5] → hardware [4, 6, 4, 2]
+  // Brass1: raw DT [3, 1, 3, 5] → hardware [0, 6, 0, 2]
   ASSERT_TRUE(brass1 != nullptr);
-  ASSERT_EQ(brass1->operators[0].dt, 4); // linear 3 → 0
+  ASSERT_EQ(brass1->operators[0].dt, 0); // linear 3 → 0
   ASSERT_EQ(brass1->operators[1].dt, 6); // linear 1 → -2
-  ASSERT_EQ(brass1->operators[2].dt, 4); // linear 3 → 0
+  ASSERT_EQ(brass1->operators[2].dt, 0); // linear 3 → 0
   ASSERT_EQ(brass1->operators[3].dt, 2); // linear 5 → +2
 
   return true;
@@ -533,8 +547,9 @@ bool test_all_detune_values_roundtrip() {
     }
 
     // Hardware 0 and 4 both mean "no detune".
-    // After roundtrip through linear-based formats (DMP, FUI), hw 0 becomes hw 4.
-    uint8_t expected_dt = (dt_val == 0) ? 4 : static_cast<uint8_t>(dt_val);
+    // After roundtrip through linear-based formats (DMP, FUI), hw 4 becomes
+    // hw 0 (0 is the canonical zero-detune register).
+    uint8_t expected_dt = (dt_val == 4) ? 0 : static_cast<uint8_t>(dt_val);
 
     // Test DMP roundtrip
     {
@@ -2371,6 +2386,40 @@ bool test_vgm_volume_variants_grouped() {
   return true;
 }
 
+// state_key/seen_ hash only the 48-byte ChannelState (no channel index),
+// and group_and_pick pools snapshots across all channels, so dedup must
+// work across DIFFERENT channels, not just re-keys of the same channel
+// (c.f. test_vgm_volume_variants_grouped, which only re-keys ch1).
+bool test_vgm_cross_channel_dedup() {
+  std::vector<uint8_t> c;
+  emit_test_patch(c, 0, 0);              // channel 1: port 0, ch 0
+  c.insert(c.end(), {0x52, 0x28, 0xF0}); // key on ch1 (code 0)
+  emit_test_patch(c, 1, 0);              // channel 4: port 1, ch 0 (identical patch)
+  c.insert(c.end(), {0x52, 0x28, 0xF4}); // key on ch4 (code 4)
+
+  // Byte-identical instrument keyed on a different channel must not add
+  // a second entry.
+  auto v1 = make_vgm(c);
+  auto result1 = vgm::parse(v1.data(), v1.size(), "xch");
+  ASSERT_TRUE(is_ok(result1));
+  ASSERT_EQ(get_ok(result1).patches.size(), static_cast<size_t>(1));
+
+  // Same instrument again on a third channel, but quieter: must still
+  // collapse into the same group and keep the loudest variant (ch1's
+  // original carrier TL = 0x08), exactly as same-channel TL variants do.
+  emit_test_patch(c, 0, 1);              // channel 2: port 0, ch 1 (same patch)
+  c.insert(c.end(), {0x52, 0x4D, 0x30}); // carrier (slot 3, ch 1) TL → 0x30, quieter
+  c.insert(c.end(), {0x52, 0x28, 0xF1}); // key on ch2 (code 1)
+
+  auto v2 = make_vgm(c);
+  auto result2 = vgm::parse(v2.data(), v2.size(), "xch");
+  ASSERT_TRUE(is_ok(result2));
+  const auto &ok2 = get_ok(result2);
+  ASSERT_EQ(ok2.patches.size(), static_cast<size_t>(1));
+  ASSERT_EQ(ok2.patches[0].operators[3].tl, 0x08);
+  return true;
+}
+
 bool test_vgm_silent_dac_and_invalid_channels() {
   std::vector<uint8_t> c;
   // Channel 1 state is all-zero (every AR=0) → silent, must be skipped.
@@ -2593,6 +2642,7 @@ int main() {
   RUN_TEST(test_detune_hardware_to_linear);
   RUN_TEST(test_detune_roundtrip_linear);
   RUN_TEST(test_detune_roundtrip_hardware);
+  RUN_TEST(test_detune_canonical_zero);
 
   std::cout << "\n=== DMP parse ===\n";
   RUN_TEST(test_dmp_parse_bright_piano);
@@ -2674,6 +2724,7 @@ int main() {
   std::cout << "\n=== VGM extraction ===\n";
   RUN_TEST(test_vgm_extract_basic);
   RUN_TEST(test_vgm_volume_variants_grouped);
+  RUN_TEST(test_vgm_cross_channel_dedup);
   RUN_TEST(test_vgm_silent_dac_and_invalid_channels);
   RUN_TEST(test_vgm_no_instruments_warns);
   RUN_TEST(test_vgm_vgz_gzip);

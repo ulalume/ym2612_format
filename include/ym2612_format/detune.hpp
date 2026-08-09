@@ -10,6 +10,11 @@ namespace ym2612_format {
 /// Hardware register layout (3 bits of $30+):
 ///   0 = 0,  1 = +1,  2 = +2,  3 = +3
 ///   4 = 0,  5 = -1,  6 = -2,  7 = -3
+///
+/// Registers 0 and 4 are hardware-equivalent (both "zero detune"; 4 is
+/// "-0"). Register 0 is the canonical encoding this function emits for
+/// the zero point, so linear-format zero detune round-trips to the same
+/// value native register formats already use.
 inline uint8_t detune_from_linear(int dt) {
   switch (dt) {
   case 0:
@@ -19,7 +24,7 @@ inline uint8_t detune_from_linear(int dt) {
   case 2:
     return 5; // -1
   case 3:
-    return 4; // 0  (could also be 0; default to 4)
+    return 0; // 0 (canonical; register 4 is an equivalent "-0" alias)
   case 4:
     return 1; // +1
   case 5:
@@ -28,7 +33,7 @@ inline uint8_t detune_from_linear(int dt) {
   case 7:
     return 3; // +3
   default:
-    return 4;
+    return 0; // out-of-range input maps to canonical zero detune
   }
 }
 
