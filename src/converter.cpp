@@ -151,7 +151,9 @@ ParseResult parse(const uint8_t *data, size_t size,
   std::optional<Error> hint_error;
   if (hint) {
     if (auto *entry = find_entry(*hint)) {
-      auto result = entry->parse(data, size, name);
+      auto result = *hint == Format::Dmp
+                        ? dmp::parse_compatible(data, size, name)
+                        : entry->parse(data, size, name);
       if (is_ok(result))
         return result;
       hint_error = get_error(result);
@@ -183,6 +185,8 @@ ParseResult parse_as(Format format, const uint8_t *data, size_t size,
   if (!entry->info.can_read)
     return Error{std::string("Format '") + format_to_extension(format) +
                  "' does not support reading"};
+  if (format == Format::Dmp)
+    return dmp::parse_compatible(data, size, name);
   return entry->parse(data, size, name);
 }
 

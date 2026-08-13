@@ -18,7 +18,9 @@ uint8_t safe_read(const uint8_t *data, size_t size, size_t index) {
 
 } // namespace
 
-ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
+static ParseResult parse_impl(const uint8_t *data, size_t size,
+                              const std::string &name,
+                              bool allow_truncated) {
   if (!data || size == 0) {
     return Error{"Empty data"};
   }
@@ -51,6 +53,14 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
 
   if (bytes.size() < 7) {
     return Error{"DMP data too small to contain a header"};
+  }
+
+  if (allow_truncated && bytes.size() < expected_size) {
+    warnings.push_back("DMP data shorter than expected (" +
+                       std::to_string(bytes.size()) + " < " +
+                       std::to_string(expected_size) +
+                       "), padding with zeros");
+    bytes.resize(expected_size, 0);
   }
 
   // DefleMask's final preset format is version 0x0B; anything newer is
@@ -172,6 +182,15 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
   }
 
   return ParseOk{{patch}, std::move(warnings)};
+}
+
+ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
+  return parse_impl(data, size, name, false);
+}
+
+ParseResult parse_compatible(const uint8_t *data, size_t size,
+                             const std::string &name) {
+  return parse_impl(data, size, name, true);
 }
 
 SerializeResult serialize(const Patch &patch) {

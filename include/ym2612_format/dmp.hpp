@@ -25,6 +25,12 @@ FormatInfo info();
 ParseResult parse(const uint8_t *data, size_t size,
                   const std::string &name = "");
 
+/// Parse a file explicitly identified as DMP, accepting truncated legacy
+/// presets by padding the missing tail bytes with zeros.  Unlike parse(), this
+/// is not suitable for format sniffing because DMP has no magic signature.
+ParseResult parse_compatible(const uint8_t *data, size_t size,
+                             const std::string &name = "");
+
 /// Serialize a patch to DMP binary format.
 SerializeResult serialize(const Patch &patch);
 

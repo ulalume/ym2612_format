@@ -1943,6 +1943,35 @@ bool test_dmp_accepts_valid_and_best_effort() {
   return true;
 }
 
+bool test_dmp_explicit_parse_recovers_truncated_preset() {
+  auto truncated = make_dmp();
+  truncated.resize(40);
+
+  // The low-level sniffer stays strict so unknown binary data cannot become a
+  // DMP patch merely because DMP is the loosest registered format.
+  ASSERT_TRUE(!is_ok(dmp::parse(truncated.data(), truncated.size())));
+  ASSERT_TRUE(!is_ok(parse(truncated.data(), truncated.size())));
+
+  // An explicit DMP choice is authoritative and preserves the legacy
+  // zero-padding behaviour.
+  auto direct = dmp::parse_compatible(truncated.data(), truncated.size(),
+                                      "truncated");
+  ASSERT_TRUE(is_ok(direct));
+  ASSERT_EQ(get_ok(direct).patches[0].algorithm, 3);
+  ASSERT_TRUE(!get_ok(direct).warnings.empty());
+
+  auto hinted = parse(truncated.data(), truncated.size(), Format::Dmp,
+                      "truncated");
+  ASSERT_TRUE(is_ok(hinted));
+  ASSERT_EQ(get_ok(hinted).patches[0].algorithm, 3);
+
+  auto explicit_format =
+      parse_as(Format::Dmp, truncated.data(), truncated.size(), "truncated");
+  ASSERT_TRUE(is_ok(explicit_format));
+  ASSERT_EQ(get_ok(explicit_format).patches[0].algorithm, 3);
+  return true;
+}
+
 // ---- VGI parse/serialize tests ----
 
 bool test_vgi_parse_synthesized() {
@@ -2655,6 +2684,7 @@ int main() {
   std::cout << "\n=== DMP sniffing ===\n";
   RUN_TEST(test_dmp_sniff_rejects_non_dmp);
   RUN_TEST(test_dmp_accepts_valid_and_best_effort);
+  RUN_TEST(test_dmp_explicit_parse_recovers_truncated_preset);
 
   std::cout << "\n=== Cross-format roundtrip ===\n";
   RUN_TEST(test_dmp_to_fui_roundtrip);

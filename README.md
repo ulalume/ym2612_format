@@ -72,10 +72,10 @@ Files containing multiple patches (DMF, FUR, MML, OPM, GINPKG, VGM) are written 
 
 using namespace ym2612_format;
 
-// Parse with auto-detection (hint by format enum)
+// Parse a file identified as DMP (also accepts truncated legacy presets)
 auto result = parse(data, size, Format::Dmp);
 
-// Parse with a specific format
+// Strict low-level DMP parser, suitable for format sniffing
 auto result = dmp::parse(data, size, "my_patch");
 
 // Serialize to a different format
