@@ -73,6 +73,11 @@ namespace {
 struct FormatEntry {
   FormatInfo info;
   ParseResult (*parse)(const uint8_t *, size_t, const std::string &);
+  /// Lenient variant used when the caller explicitly names this format
+  /// (hint or parse_as); sniffing always uses the strict parse.
+  /// nullptr when the module has no separate compatibility parser.
+  ParseResult (*parse_compatible)(const uint8_t *, size_t,
+                                  const std::string &);
   SerializeResult (*serialize)(const Patch &);         // nullptr if read-only
   SerializeTextResult (*serialize_text)(const Patch &); // nullptr if N/A
 };
@@ -92,10 +97,13 @@ FormatEntry make_entry(FormatInfo info,
                        ParseResult (*parse)(const uint8_t *, size_t,
                                             const std::string &),
                        SerializeResult (*serialize)(const Patch &),
-                       SerializeTextResult (*serialize_text)(const Patch &)) {
+                       SerializeTextResult (*serialize_text)(const Patch &),
+                       ParseResult (*parse_compatible)(const uint8_t *, size_t,
+                                                       const std::string &) =
+                           nullptr) {
   info.can_read = parse != nullptr;
   info.can_write = serialize != nullptr;
-  return {std::move(info), parse, serialize, serialize_text};
+  return {std::move(info), parse, parse_compatible, serialize, serialize_text};
 }
 
 const std::vector<FormatEntry> &formats() {
@@ -114,11 +122,13 @@ const std::vector<FormatEntry> &formats() {
                  ctrmml_serialize_text_wrapper),
       make_entry(fur::info(), fur::parse, nullptr, nullptr),
       make_entry(opm::info(), opm::parse, nullptr, nullptr),
-      make_entry(tfi::info(), tfi::parse, tfi::serialize, nullptr),
+      make_entry(tfi::info(), tfi::parse, tfi::serialize, nullptr,
+                 tfi::parse_compatible),
       make_entry(vgi::info(), vgi::parse, vgi::serialize, nullptr),
       make_entry(eif::info(), eif::parse, eif::serialize, nullptr),
       // Loosest magic-less sniffer — stays last (see ordering rule).
-      make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr),
+      make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr,
+                 dmp::parse_compatible),
   };
   return entries;
 }
@@ -147,13 +157,15 @@ ParseResult parse(const uint8_t *data, size_t size,
   if (!data || size == 0)
     return Error{"Empty data"};
 
-  // Try the hinted format first
+  // Try the hinted format first.  An explicit format choice is
+  // authoritative, so prefer the module's lenient compatibility parser
+  // over the strict sniffing one when it provides both.
   std::optional<Error> hint_error;
   if (hint) {
     if (auto *entry = find_entry(*hint)) {
-      auto result = *hint == Format::Dmp
-                        ? dmp::parse_compatible(data, size, name)
-                        : entry->parse(data, size, name);
+      auto *parse_fn =
+          entry->parse_compatible ? entry->parse_compatible : entry->parse;
+      auto result = parse_fn(data, size, name);
       if (is_ok(result))
         return result;
       hint_error = get_error(result);
@@ -185,9 +197,11 @@ ParseResult parse_as(Format format, const uint8_t *data, size_t size,
   if (!entry->info.can_read)
     return Error{std::string("Format '") + format_to_extension(format) +
                  "' does not support reading"};
-  if (format == Format::Dmp)
-    return dmp::parse_compatible(data, size, name);
-  return entry->parse(data, size, name);
+  // Same rule as the hint path in parse(): an explicit format choice
+  // gets the lenient compatibility parser when the module has one.
+  auto *parse_fn =
+      entry->parse_compatible ? entry->parse_compatible : entry->parse;
+  return parse_fn(data, size, name);
 }
 
 SerializeResult serialize(Format format, const Patch &patch) {

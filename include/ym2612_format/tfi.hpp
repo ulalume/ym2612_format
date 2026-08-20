@@ -48,6 +48,14 @@ FormatInfo info();
 ParseResult parse(const uint8_t *data, size_t size,
                   const std::string &name = "");
 
+/// Parse a file explicitly identified as TFI, masking out-of-range field
+/// values down to their hardware register width instead of rejecting the
+/// file (old TFM Maker builds and ROM-ripped banks write such bytes).
+/// The exact 42-byte layout is still required.  Unlike parse(), this is
+/// not suitable for format sniffing because TFI has no magic signature.
+ParseResult parse_compatible(const uint8_t *data, size_t size,
+                             const std::string &name = "");
+
 /// Serialize a Patch to the 42-byte TFI format.  Fields the format
 /// cannot represent (name, pan, LFO, AMS/FMS, per-op AM-EN) are
 /// silently dropped, matching the convention of other serializers

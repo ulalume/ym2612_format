@@ -1865,6 +1865,54 @@ bool test_tfi_via_high_level() {
   return true;
 }
 
+bool test_tfi_explicit_parse_recovers_out_of_range_fields() {
+  // Real-world corpus damage: old TFM Maker builds write MUL bytes with
+  // high bits set (0x1F/0x7F), and ROM-ripped banks carry junk in unused
+  // operator slots.  Synthesize both kinds of damage on a valid file.
+  std::vector<uint8_t> t(42, 0);
+  t[0] = 3; // algorithm
+  t[1] = 5; // feedback
+  for (int op = 0; op < 4; ++op) {
+    uint8_t *p = t.data() + 2 + op * 10;
+    p[0] = 2;  // MUL
+    p[1] = 3;  // DT (linear zero)
+    p[2] = 20; // TL
+    p[4] = 31; // AR
+    p[7] = 7;  // RR
+  }
+  t[2] = 0x1F;     // OP1 MUL with junk high bits (masks to 15)
+  t[2 + 1] = 0x10; // OP1 DT out of linear range (maps to zero detune)
+
+  // The low-level sniffer and hint-less auto-detection stay strict.
+  ASSERT_TRUE(!is_ok(tfi::parse(t.data(), t.size())));
+  ASSERT_TRUE(!is_ok(parse(t.data(), t.size())));
+
+  // An explicit TFI choice is authoritative: out-of-range fields are
+  // masked to hardware ranges and reported as a warning.
+  auto direct = tfi::parse_compatible(t.data(), t.size(), "junk");
+  ASSERT_TRUE(is_ok(direct));
+  ASSERT_EQ(get_ok(direct).patches[0].operators[0].ml, 15);
+  ASSERT_EQ(get_ok(direct).patches[0].operators[0].dt, 0);
+  ASSERT_EQ(get_ok(direct).patches[0].algorithm, 3);
+  ASSERT_TRUE(!get_ok(direct).warnings.empty());
+
+  auto hinted = parse(t.data(), t.size(), Format::Tfi, "junk");
+  ASSERT_TRUE(is_ok(hinted));
+  ASSERT_EQ(get_ok(hinted).patches[0].operators[0].ml, 15);
+
+  auto explicit_format = parse_as(Format::Tfi, t.data(), t.size(), "junk");
+  ASSERT_TRUE(is_ok(explicit_format));
+  ASSERT_EQ(get_ok(explicit_format).patches[0].operators[0].ml, 15);
+
+  // Wrong sizes stay rejected even on the compatibility path: a wrong
+  // size means foreign data, not a sloppily written TFI.
+  std::vector<uint8_t> too_small(41, 0);
+  ASSERT_TRUE(!is_ok(tfi::parse_compatible(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(43, 0);
+  ASSERT_TRUE(!is_ok(tfi::parse_compatible(too_big.data(), too_big.size())));
+  return true;
+}
+
 // ---- DMP sniffing tests ----
 
 /// Synthesize a valid 51-byte v11 Genesis FM preset.
@@ -2738,6 +2786,7 @@ int main() {
   RUN_TEST(test_tfi_parse_real_file);
   RUN_TEST(test_tfi_sniff_rejects_non_tfi);
   RUN_TEST(test_tfi_via_high_level);
+  RUN_TEST(test_tfi_explicit_parse_recovers_out_of_range_fields);
 
   std::cout << "\n=== VGI parse/serialize ===\n";
   RUN_TEST(test_vgi_parse_synthesized);

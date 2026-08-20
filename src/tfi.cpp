@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <string>
 
 namespace ym2612_format::tfi {
 
@@ -42,18 +43,61 @@ bool looks_like_tfi(const uint8_t *data, size_t size) {
   return true;
 }
 
+/// Human-readable list of the fields looks_like_tfi() rejected in a
+/// 42-byte buffer, e.g. "OP1 MUL=31, OP4 MUL=127".
+std::string out_of_range_summary(const uint8_t *data) {
+  static constexpr struct {
+    const char *name;
+    uint8_t max;
+  } kOpFields[kOpBytes] = {
+      {"MUL", 0x0F}, {"DT", 0x07}, {"TL", 0x7F}, {"RS", 0x03},
+      {"AR", 0x1F},  {"DR", 0x1F}, {"SR", 0x1F}, {"RR", 0x0F},
+      {"SL", 0x0F},  {"SSG-EG", 0x0F},
+  };
+  std::string out;
+  auto add = [&out](const std::string &item) {
+    if (!out.empty())
+      out += ", ";
+    out += item;
+  };
+  if (data[0] > 7)
+    add("ALG=" + std::to_string(data[0]));
+  if (data[1] > 7)
+    add("FB=" + std::to_string(data[1]));
+  for (int op = 0; op < 4; ++op) {
+    const uint8_t *p = data + kHeaderSize + op * kOpBytes;
+    for (size_t i = 0; i < kOpBytes; ++i) {
+      if (p[i] > kOpFields[i].max)
+        add("OP" + std::to_string(op + 1) + " " + kOpFields[i].name + "=" +
+            std::to_string(p[i]));
+    }
+  }
+  return out;
+}
+
 } // namespace
 
 FormatInfo info() {
   return {Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true, false};
 }
 
-ParseResult parse(const uint8_t *data, size_t size,
-                  const std::string &fallback_name) {
+static ParseResult parse_impl(const uint8_t *data, size_t size,
+                              const std::string &fallback_name,
+                              bool allow_out_of_range) {
   if (!data || size == 0)
     return Error{"Empty data"};
-  if (!looks_like_tfi(data, size))
-    return Error{"Not a TFI file (expected 42 bytes with valid ranges)"};
+
+  std::vector<std::string> warnings;
+  if (!looks_like_tfi(data, size)) {
+    // The compatibility path forgives field ranges only — the exact
+    // 42-byte layout is required either way, since a wrong size means
+    // the data is foreign rather than a sloppily written TFI.
+    if (!allow_out_of_range || size != kFileSize)
+      return Error{"Not a TFI file (expected 42 bytes with valid ranges)"};
+    warnings.push_back("TFI fields out of range (" +
+                       out_of_range_summary(data) +
+                       "), masked to hardware ranges");
+  }
 
   Patch patch;
   patch.name = fallback_name;
@@ -90,7 +134,17 @@ ParseResult parse(const uint8_t *data, size_t size,
     o.enable = true;
   }
 
-  return ParseOk{{std::move(patch)}, {}};
+  return ParseOk{{std::move(patch)}, std::move(warnings)};
+}
+
+ParseResult parse(const uint8_t *data, size_t size,
+                  const std::string &fallback_name) {
+  return parse_impl(data, size, fallback_name, false);
+}
+
+ParseResult parse_compatible(const uint8_t *data, size_t size,
+                             const std::string &fallback_name) {
+  return parse_impl(data, size, fallback_name, true);
 }
 
 SerializeResult serialize(const Patch &patch) {
