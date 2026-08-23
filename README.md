@@ -11,11 +11,11 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 | `.fui`     | Furnace Instrument |  o   |   o   |   o    | FINS + legacy                              |
 | `.fur`     | Furnace Module     |  o   |       |   o    | Extracts FM instruments                    |
 | `.rym2612` | RYM2612 Preset     |  o   |       |        | XML                                        |
-| `.mml`     | ctrmml (MML)       |  o   |   o   |        | Pitch macro output as `@M`                 |
+| `.mml`     | ctrmml             |  o   |   o   |        | Pitch macro output as `@M`                 |
 | `.opm`     | VOPM / MiOPMdrv    |  o   |       |        | OPM → OPN2; DT2/AMD/PMD/WF/NE/SLOT dropped |
 | `.tfi`     | TFM Music Maker    |  o   |   o   |        | 42-byte YM2203/OPN2 FM patch               |
 | `.vgi`     | VGM Music Maker    |  o   |   o   |        | 43-byte OPN2 FM patch (TFI + FMS/AMS/AM)   |
-| `.eif`     | Echo (EIF)         |  o   |   o   |        | 29-byte raw register dump                  |
+| `.eif`     | Echo               |  o   |   o   |        | 29-byte raw register dump                  |
 | `.vgm` / `.vgz` | VGM register log | o |       |        | Reconstructs FM instruments from YM2612 writes |
 | `.gin`     | GIN (JSON)         |  o   |   o   |   o    |                                            |
 | `.ginpkg`  | GINPKG (ZIP)       |  o   |       |        | Extracts all versions                      |

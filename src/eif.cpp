@@ -33,7 +33,7 @@ bool looks_like_eif(const uint8_t *data, size_t size) {
 } // namespace
 
 FormatInfo info() {
-  return {Format::Eif, "Echo (EIF)", "eif", true, true, false};
+  return {Format::Eif, "Echo", "eif", true, true, false};
 }
 
 ParseResult parse(const uint8_t *data, size_t size,

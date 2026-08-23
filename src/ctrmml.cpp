@@ -12,7 +12,7 @@
 
 namespace ym2612_format::ctrmml {
 
-FormatInfo info() { return {Format::Mml, "ctrmml (MML)", "mml", true, true, true}; }
+FormatInfo info() { return {Format::Mml, "ctrmml", "mml", true, true, true}; }
 
 namespace {
 

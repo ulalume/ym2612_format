@@ -44,7 +44,7 @@ bool looks_like_vgi(const uint8_t *data, size_t size) {
 } // namespace
 
 FormatInfo info() {
-  return {Format::Vgi, "VGM Music Maker (VGI)", "vgi", true, true, false};
+  return {Format::Vgi, "VGM Music Maker", "vgi", true, true, false};
 }
 
 ParseResult parse(const uint8_t *data, size_t size,

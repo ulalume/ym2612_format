@@ -78,7 +78,7 @@ std::string out_of_range_summary(const uint8_t *data) {
 } // namespace
 
 FormatInfo info() {
-  return {Format::Tfi, "TFM Music Maker (TFI)", "tfi", true, true, false};
+  return {Format::Tfi, "TFM Music Maker", "tfi", true, true, false};
 }
 
 static ParseResult parse_impl(const uint8_t *data, size_t size,
