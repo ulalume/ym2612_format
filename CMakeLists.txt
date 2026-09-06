@@ -34,6 +34,7 @@ endif()
 
 # --- Library ---
 add_library(ym2612_format STATIC
+  src/c_api.cpp
   src/dmf.cpp
   src/dmp.cpp
   src/fui.cpp
@@ -57,6 +58,10 @@ target_include_directories(ym2612_format PUBLIC
 
 target_include_directories(ym2612_format PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+
+target_compile_definitions(ym2612_format PRIVATE
+  YM2612_FORMAT_VERSION="${PROJECT_VERSION}"
 )
 
 target_link_libraries(ym2612_format PUBLIC miniz)
