@@ -2317,6 +2317,197 @@ bool test_eif_via_high_level() {
   return true;
 }
 
+// ---- SPAT parse/serialize tests ----
+
+bool test_spat_parse_synthesized() {
+  // Same 29 synthesized EIF bytes, plus 3 reserved zero bytes.
+  const uint8_t bytes[32] = {
+      0x1C,                   // $B0: alg=4, fb=3
+      0x12, 0x71, 0x04, 0x41, // $30: DT|MUL per op
+      0x26, 0x00, 0x14, 0x04, // $40: TL
+      0x5F, 0x19, 0x9E, 0x1C, // $50: RS|AR
+      0x89, 0x00, 0x06, 0x05, // $60: AM|DR
+      0x04, 0x00, 0x02, 0x01, // $70: SR
+      0x38, 0x07, 0x26, 0x15, // $80: SL|RR
+      0x0C, 0x00, 0x00, 0x00, // $90: SSG-EG
+      0x00, 0x00, 0x00,       // reserved
+  };
+
+  auto result = spat::parse(bytes, sizeof(bytes), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_TRUE(p.left && p.right);
+
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+  return true;
+}
+
+bool test_spat_roundtrip_synthesized() {
+  Patch original;
+  original.name = "rt";
+  original.algorithm = 6;
+  original.feedback = 1;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (15 - i) & 0x0F;
+    static const uint8_t dt_hw[] = {0, 4, 7, 3}; // +0, -0, -3, +3
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(127 - i * 13);
+    o.ks = static_cast<uint8_t>(i);
+    o.ar = static_cast<uint8_t>(31 - i * 2);
+    o.dr = static_cast<uint8_t>(i * 7);
+    o.sr = static_cast<uint8_t>(i * 5);
+    o.rr = static_cast<uint8_t>(15 - i);
+    o.sl = static_cast<uint8_t>(i * 4);
+    o.am = (i == 0 || i == 3);
+    o.ssg_enable = (i == 2);
+    o.ssg = (i == 2) ? 7 : 0;
+    o.enable = true;
+  }
+
+  auto ser = spat::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(32));
+  ASSERT_EQ(bytes[29], 0);
+  ASSERT_EQ(bytes[30], 0);
+  ASSERT_EQ(bytes[31], 0);
+
+  auto parsed = spat::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  if (!patches_strict_equal(original, p)) {
+    print_patch_diff(original, p);
+    return false;
+  }
+  return true;
+}
+
+bool test_spat_matches_eif_prefix() {
+  Patch original;
+  original.name = "prefix";
+  original.algorithm = 5;
+  original.feedback = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = static_cast<uint8_t>(i + 1);
+    o.dt = static_cast<uint8_t>(i);
+    o.tl = static_cast<uint8_t>(i * 10);
+    o.ks = static_cast<uint8_t>(i % 4);
+    o.ar = static_cast<uint8_t>(31 - i);
+    o.dr = static_cast<uint8_t>(i * 3);
+    o.sr = static_cast<uint8_t>(i * 2);
+    o.rr = static_cast<uint8_t>(15 - i);
+    o.sl = static_cast<uint8_t>(i);
+    o.am = (i % 2) == 0;
+    o.ssg_enable = false;
+    o.ssg = 0;
+    o.enable = true;
+  }
+
+  auto spat_ser = spat::serialize(original);
+  auto eif_ser = eif::serialize(original);
+  ASSERT_TRUE(is_ok(spat_ser));
+  ASSERT_TRUE(is_ok(eif_ser));
+
+  const auto &spat_bytes = get_ok(spat_ser);
+  const auto &eif_bytes = get_ok(eif_ser);
+  ASSERT_EQ(eif_bytes.size(), static_cast<size_t>(29));
+  ASSERT_TRUE(std::equal(eif_bytes.begin(), eif_bytes.end(), spat_bytes.begin()));
+  return true;
+}
+
+bool test_spat_sniff_rejects_non_spat() {
+  // Wrong sizes — reject.
+  std::vector<uint8_t> eif_size(29, 0); // a valid EIF, but not 32 bytes
+  ASSERT_TRUE(!is_ok(spat::parse(eif_size.data(), eif_size.size())));
+  std::vector<uint8_t> too_small(31, 0);
+  ASSERT_TRUE(!is_ok(spat::parse(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(33, 0);
+  ASSERT_TRUE(!is_ok(spat::parse(too_big.data(), too_big.size())));
+
+  // Right size, but a reserved byte is non-zero.
+  std::vector<uint8_t> bad_reserved_29(32, 0);
+  bad_reserved_29[29] = 0x01;
+  ASSERT_TRUE(!is_ok(spat::parse(bad_reserved_29.data(), bad_reserved_29.size())));
+
+  std::vector<uint8_t> bad_reserved_31(32, 0);
+  bad_reserved_31[31] = 0x80;
+  ASSERT_TRUE(!is_ok(spat::parse(bad_reserved_31.data(), bad_reserved_31.size())));
+
+  // Right size, reserved bytes zero, but the underlying EIF range is invalid.
+  std::vector<uint8_t> bad_b0(32, 0);
+  bad_b0[0] = 0x40; // unused bits in $B0
+  ASSERT_TRUE(!is_ok(spat::parse(bad_b0.data(), bad_b0.size())));
+
+  std::vector<uint8_t> bad_tl(32, 0);
+  bad_tl[5] = 0x80; // TL out of 7-bit range
+  ASSERT_TRUE(!is_ok(spat::parse(bad_tl.data(), bad_tl.size())));
+
+  // All-zero is a valid patch, same as EIF.
+  std::vector<uint8_t> all_zero(32, 0);
+  ASSERT_TRUE(is_ok(spat::parse(all_zero.data(), all_zero.size())));
+  return true;
+}
+
+bool test_spat_via_high_level() {
+  auto f = format_from_string("spat");
+  ASSERT_TRUE(f.has_value() && *f == Format::Spat);
+  auto f_upper = format_from_string(".SPAT");
+  ASSERT_TRUE(f_upper.has_value() && *f_upper == Format::Spat);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Spat)) == "spat");
+
+  Patch p;
+  p.algorithm = 7;
+  p.feedback = 4;
+  for (int i = 0; i < 4; ++i) {
+    p.operators[i].ar = 31;
+    p.operators[i].tl = 20;
+  }
+  auto ser = serialize(Format::Spat, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(32));
+
+  auto parsed = parse(get_ok(ser).data(), get_ok(ser).size(), Format::Spat,
+                      "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 7);
+
+  // Hint-less auto-detection must also find it (verifies registry sniff
+  // order: spat is checked before the loose dmp sniffer).
+  auto auto_parsed = parse(get_ok(ser).data(), get_ok(ser).size(),
+                           std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(auto_parsed));
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].algorithm, 7);
+  return true;
+}
+
 // ---- VGM extraction tests ----
 
 /// Build a minimal v1.50 VGM around the given command stream (0x66
@@ -2799,6 +2990,13 @@ int main() {
   RUN_TEST(test_eif_roundtrip_synthesized);
   RUN_TEST(test_eif_sniff_rejects_non_eif);
   RUN_TEST(test_eif_via_high_level);
+
+  std::cout << "\n=== SPAT parse/serialize ===\n";
+  RUN_TEST(test_spat_parse_synthesized);
+  RUN_TEST(test_spat_roundtrip_synthesized);
+  RUN_TEST(test_spat_matches_eif_prefix);
+  RUN_TEST(test_spat_sniff_rejects_non_spat);
+  RUN_TEST(test_spat_via_high_level);
 
   std::cout << "\n=== VGM extraction ===\n";
   RUN_TEST(test_vgm_extract_basic);

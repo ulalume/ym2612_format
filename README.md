@@ -16,6 +16,7 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 | `.tfi`     | TFM Music Maker    |  o   |   o   |        | 42-byte YM2203/OPN2 FM patch               |
 | `.vgi`     | VGM Music Maker    |  o   |   o   |        | 43-byte OPN2 FM patch (TFI + FMS/AMS/AM)   |
 | `.eif`     | Echo               |  o   |   o   |        | 29-byte raw register dump                  |
+| `.spat`    | Sona               |  o   |   o   |        | 32-byte raw register dump (EIF + 3 reserved bytes) |
 | `.vgm` / `.vgz` | VGM register log | o |       |        | Reconstructs FM instruments from YM2612 writes |
 | `.gin`     | GIN (JSON)         |  o   |   o   |   o    |                                            |
 | `.ginpkg`  | GINPKG (ZIP)       |  o   |       |        | Extracts all versions                      |

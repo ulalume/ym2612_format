@@ -46,6 +46,7 @@ add_library(ym2612_format STATIC
   src/tfi.cpp
   src/vgi.cpp
   src/eif.cpp
+  src/spat.cpp
   src/vgm.cpp
   src/converter.cpp
 )

@@ -16,6 +16,7 @@
 #include "patch.hpp"
 #include "result.hpp"
 #include "rym2612.hpp"
+#include "spat.hpp"
 #include "tfi.hpp"
 #include "vgi.hpp"
 #include "vgm.hpp"

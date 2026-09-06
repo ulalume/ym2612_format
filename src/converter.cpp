@@ -10,6 +10,7 @@
 #include "ym2612_format/ginpkg.hpp"
 #include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
+#include "ym2612_format/spat.hpp"
 #include "ym2612_format/tfi.hpp"
 #include "ym2612_format/vgi.hpp"
 #include "ym2612_format/vgm.hpp"
@@ -40,6 +41,7 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"eif", Format::Eif},
       {"vgm", Format::Vgm},
       {"vgz", Format::Vgm},
+      {"spat", Format::Spat},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -62,6 +64,7 @@ const char *format_to_extension(Format f) {
   case Format::Vgi:     return "vgi";
   case Format::Eif:     return "eif";
   case Format::Vgm:     return "vgm";
+  case Format::Spat:    return "spat";
   }
   return "";
 }
@@ -109,8 +112,8 @@ FormatEntry make_entry(FormatInfo info,
 const std::vector<FormatEntry> &formats() {
   // Ordering rule for hint-less auto-detection: entries with magic
   // bytes come first, magic-less size/range-validated sniffers (tfi,
-  // vgi, eif, dmp) after them.  Dmp stays last as the loosest of the
-  // magic-less sniffers.  Keep new formats above it.
+  // vgi, eif, spat, dmp) after them.  Dmp stays last as the loosest of
+  // the magic-less sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
       make_entry(vgm::info(), vgm::parse, nullptr, nullptr),
       make_entry(dmf::info(), dmf::parse, nullptr, nullptr),
@@ -126,6 +129,7 @@ const std::vector<FormatEntry> &formats() {
                  tfi::parse_compatible),
       make_entry(vgi::info(), vgi::parse, vgi::serialize, nullptr),
       make_entry(eif::info(), eif::parse, eif::serialize, nullptr),
+      make_entry(spat::info(), spat::parse, spat::serialize, nullptr),
       // Loosest magic-less sniffer — stays last (see ordering rule).
       make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr,
                  dmp::parse_compatible),
