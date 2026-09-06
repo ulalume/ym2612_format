@@ -84,4 +84,12 @@ if(YM2612_FORMAT_BUILD_TESTS)
   )
 
   add_test(NAME roundtrip_test COMMAND ym2612_format_test)
+
+  add_executable(ym2612_format_c_api_test test/c_api_test.cpp)
+  target_link_libraries(ym2612_format_c_api_test PRIVATE ym2612_format)
+  target_compile_definitions(ym2612_format_c_api_test PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test"
+  )
+
+  add_test(NAME c_api_test COMMAND ym2612_format_c_api_test)
 endif()
