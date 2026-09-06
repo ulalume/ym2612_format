@@ -22,6 +22,7 @@ enum class Format {
   Vgi,     ///< VGM Music Maker (.vgi) — 43-byte YM2612 FM patch
   Eif,     ///< Echo sound engine (.eif) — 29-byte raw register dump
   Vgm,     ///< VGM/VGZ register log (.vgm/.vgz) — read-only, extracts FM instruments
+  Spat,    ///< Sona sound driver (.spat) — 32-byte raw register dump (EIF + 3 reserved bytes)
 };
 
 /// Convert a string (extension with or without dot) to a Format.
