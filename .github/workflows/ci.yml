@@ -15,18 +15,21 @@ jobs:
           - os: macos-14
             target: arm64
             os_name: macos
+            rust: true
           - os: macos-14
             target: x86_64
             os_name: macos
           - os: ubuntu-22.04
             target: x86_64
             os_name: linux
+            rust: true
           - os: ubuntu-22.04
             target: aarch64
             os_name: linux
           - os: windows-2022
             target: x86_64
             os_name: windows
+            rust: true
           - os: windows-2022
             target: aarch64
             os_name: windows
@@ -81,3 +84,12 @@ jobs:
         shell: pwsh
         run: |
           if (Test-Path "build/Release/ym2612_convert.exe") { Write-Host "OK" } else { throw "Binary not found" }
+
+      # --- Rust crate (native targets only) ---
+      - name: Install Rust
+        if: matrix.rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test Rust crate
+        if: matrix.rust
+        run: cargo test --manifest-path rust/ym2612-format/Cargo.toml
