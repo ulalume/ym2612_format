@@ -28,23 +28,41 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
         library.flag("/EHsc");
     }
-    for file in cpp_sources(&src) {
+    let sources = cpp_sources(&src);
+    for file in &sources {
         library.file(file);
     }
     library.compile("ym2612_format");
 
+    let miniz_header = miniz.join("miniz.h");
+    let miniz_source = miniz.join("miniz.c");
     let mut miniz_build = cc::Build::new();
     miniz_build
         .warnings(false)
         .include(&miniz)
-        .file(miniz.join("miniz.c"))
+        .file(&miniz_source)
         .compile("miniz");
 
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed={}", src.display());
-    println!("cargo:rerun-if-changed={}", include.display());
-    println!("cargo:rerun-if-changed={}", miniz.display());
-    println!("cargo:rerun-if-changed={}", cmakelists.display());
+    for file in sources
+        .iter()
+        .chain(headers(&include.join("ym2612_format")).iter())
+        .chain(headers(&src).iter())
+        .chain([&miniz_source, &miniz_header, &cmakelists])
+    {
+        println!("cargo:rerun-if-changed={}", file.display());
+    }
+}
+
+/// Header files directly inside `dir`, non-recursive.
+fn headers(dir: &Path) -> Vec<PathBuf> {
+    fs::read_dir(dir)
+        .expect("directory not readable")
+        .filter_map(|entry| {
+            let path = entry.ok()?.path();
+            (path.extension()? == "hpp" || path.extension()? == "h").then_some(path)
+        })
+        .collect()
 }
 
 /// Library sources, non-recursive so that src/cli is left out.
