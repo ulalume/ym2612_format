@@ -34,6 +34,16 @@ fn formats_describe_every_capability() {
 
     let vgm = formats.iter().find(|f| f.format == "vgm").expect("vgm");
     assert!(vgm.can_read && !vgm.can_write);
+    assert_eq!(vgm.extensions, vec!["vgm", "vgz"]);
+}
+
+#[test]
+fn extensions_start_with_the_primary_extension() {
+    let formats = ym2612_format::formats();
+    assert!(!formats.is_empty());
+    for format in &formats {
+        assert_eq!(format.extensions[0], format.extension, "{}", format.format);
+    }
 }
 
 #[test]

@@ -136,6 +136,13 @@ char *ym2612_formats_json(void) {
       json_string(out, info.name);
       out += ",\"extension\":";
       json_string(out, info.extension);
+      out += ",\"extensions\":[";
+      json_string(out, info.extension);
+      for (const auto &alias : info.aliases) {
+        out += ',';
+        json_string(out, alias);
+      }
+      out += ']';
       out += ",\"can_read\":";
       out += info.can_read ? "true" : "false";
       out += ",\"can_write\":";

@@ -23,6 +23,8 @@ pub struct FormatInfo {
     pub name: String,
     /// File extension without dot.
     pub extension: String,
+    /// Primary extension followed by any aliases (e.g. `["vgm", "vgz"]`).
+    pub extensions: Vec<String>,
     pub can_read: bool,
     pub can_write: bool,
     pub is_text: bool,

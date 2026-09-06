@@ -65,7 +65,8 @@ bool test_formats_json() {
   ASSERT_TRUE(json != nullptr);
   bool ok = contains(json, "\"dmp\"") && contains(json, "\"can_write\"") &&
             contains(json, "\"can_read\"") && contains(json, "\"is_text\"") &&
-            contains(json, "\"mml\"");
+            contains(json, "\"mml\"") &&
+            contains(json, "\"extensions\":[\"vgm\",\"vgz\"]");
   ym2612_free(json);
   ASSERT_TRUE(ok);
   return true;

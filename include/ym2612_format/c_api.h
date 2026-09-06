@@ -13,8 +13,9 @@ const char *ym2612_version(void);
 
 /* JSON array of format descriptors:
  * [{"format":"dmp","name":"DefleMask Preset","extension":"dmp",
- *   "can_read":true,"can_write":true,"is_text":false}, ...]
- * Free with ym2612_free. */
+ *   "extensions":["dmp"],"can_read":true,"can_write":true,"is_text":false}, ...]
+ * "extensions" lists the primary extension followed by any aliases (e.g.
+ * ["vgm","vgz"]). Free with ym2612_free. */
 char *ym2612_formats_json(void);
 
 /* Parse instrument data.
