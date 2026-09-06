@@ -4,10 +4,12 @@ use std::path::{Path, PathBuf};
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
+    // No canonicalize: on Windows it yields `\\?\` paths that cl.exe rejects.
     let root = manifest
-        .join("../..")
-        .canonicalize()
-        .expect("repository root not found");
+        .parent()
+        .and_then(Path::parent)
+        .expect("repository root not found")
+        .to_path_buf();
 
     let src = root.join("src");
     let include = root.join("include");
