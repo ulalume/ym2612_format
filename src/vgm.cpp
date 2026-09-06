@@ -374,7 +374,8 @@ int operand_length(uint8_t cmd, uint32_t version) {
 } // namespace
 
 FormatInfo info() {
-  return {Format::Vgm, "VGM/VGZ register log", "vgm", true, false, false};
+  return {Format::Vgm, "VGM/VGZ register log", "vgm", true, false, false,
+          {"vgz"}};
 }
 
 ParseResult parse(const uint8_t *data, size_t size,

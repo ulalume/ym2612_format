@@ -14,13 +14,13 @@ include(FetchContent)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
-FetchContent_Declare(
-  miniz
-  GIT_REPOSITORY https://github.com/richgel999/miniz.git
-  GIT_TAG 3.1.1
+# miniz 3.1.1 amalgamation, vendored in third_party/miniz.
+enable_language(C)
+add_library(miniz STATIC third_party/miniz/miniz.c)
+target_include_directories(miniz PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz>
+  $<INSTALL_INTERFACE:include>
 )
-
-FetchContent_MakeAvailable(miniz)
 
 # nlohmann/json is only needed by the CLI tool (info --json output).
 # The library itself uses a lightweight internal JSON implementation.
@@ -34,6 +34,7 @@ endif()
 
 # --- Library ---
 add_library(ym2612_format STATIC
+  src/c_api.cpp
   src/dmf.cpp
   src/dmp.cpp
   src/fui.cpp
@@ -60,6 +61,10 @@ target_include_directories(ym2612_format PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
+target_compile_definitions(ym2612_format PRIVATE
+  YM2612_FORMAT_VERSION="${PROJECT_VERSION}"
+)
+
 target_link_libraries(ym2612_format PUBLIC miniz)
 
 # --- CLI ---
@@ -80,4 +85,12 @@ if(YM2612_FORMAT_BUILD_TESTS)
   )
 
   add_test(NAME roundtrip_test COMMAND ym2612_format_test)
+
+  add_executable(ym2612_format_c_api_test test/c_api_test.cpp)
+  target_link_libraries(ym2612_format_c_api_test PRIVATE ym2612_format)
+  target_compile_definitions(ym2612_format_c_api_test PRIVATE
+    TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/test"
+  )
+
+  add_test(NAME c_api_test COMMAND ym2612_format_c_api_test)
 endif()

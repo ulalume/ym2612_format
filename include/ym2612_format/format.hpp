@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace ym2612_format {
 
@@ -40,6 +41,7 @@ struct FormatInfo {
   bool can_read = false;
   bool can_write = false;
   bool is_text = false; ///< True for text-based formats (MML, etc.)
+  std::vector<std::string> aliases; ///< Additional extensions without dot
 };
 
 } // namespace ym2612_format

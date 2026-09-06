@@ -35,7 +35,7 @@ cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
 
-Dependencies (nlohmann/json, miniz) are fetched automatically via CMake FetchContent.
+miniz is vendored under `third_party/miniz`. nlohmann/json is fetched with FetchContent when `YM2612_FORMAT_BUILD_CLI=ON`.
 
 ### Options
 
@@ -68,30 +68,12 @@ Files containing multiple patches (DMF, FUR, MML, OPM, GINPKG, VGM) are written 
 
 ## Library usage
 
-```cpp
-#include <ym2612_format/ym2612_format.hpp>
-
-using namespace ym2612_format;
-
-// Parse a file identified as DMP (also accepts truncated legacy presets)
-auto result = parse(data, size, Format::Dmp);
-
-// Strict low-level DMP parser, suitable for format sniffing
-auto result = dmp::parse(data, size, "my_patch");
-
-// Serialize to a different format
-auto bytes = fui::serialize(patch);
-
-// High-level API with Format enum
-auto bytes = serialize(Format::Fui, patch);
-```
-
-CMake integration:
-
 ```cmake
 add_subdirectory(ym2612_format)
 target_link_libraries(your_target PRIVATE ym2612_format)
 ```
+
+C++, C, and Rust APIs: see [doc/LIBRARY_USAGE.md](doc/LIBRARY_USAGE.md).
 
 ## Credits
 
