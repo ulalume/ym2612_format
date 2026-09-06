@@ -14,13 +14,13 @@ include(FetchContent)
 
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "" FORCE)
 
-FetchContent_Declare(
-  miniz
-  GIT_REPOSITORY https://github.com/richgel999/miniz.git
-  GIT_TAG 3.1.1
+# miniz 3.1.1 amalgamation, vendored in third_party/miniz.
+enable_language(C)
+add_library(miniz STATIC third_party/miniz/miniz.c)
+target_include_directories(miniz PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/third_party/miniz>
+  $<INSTALL_INTERFACE:include>
 )
-
-FetchContent_MakeAvailable(miniz)
 
 # nlohmann/json is only needed by the CLI tool (info --json output).
 # The library itself uses a lightweight internal JSON implementation.
