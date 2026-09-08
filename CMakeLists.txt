@@ -48,6 +48,10 @@ add_library(ym2612_format STATIC
   src/vgi.cpp
   src/eif.cpp
   src/spat.cpp
+  src/tyi.cpp
+  src/y12.cpp
+  src/dat.cpp
+  src/ins.cpp
   src/vgm.cpp
   src/converter.cpp
 )

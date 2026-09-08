@@ -2508,6 +2508,842 @@ bool test_spat_via_high_level() {
   return true;
 }
 
+// ---- TYI parse/serialize tests ----
+
+bool test_tyi_parse_synthesized() {
+  // Synthesized 32-byte TYI: raw register values grouped by parameter,
+  // followed by $B0, $B4 and the "YI" signature.
+  const uint8_t bytes[32] = {
+      0x12, 0x71, 0x04, 0x41, // $30: DT|MUL per op
+      0x26, 0x00, 0x14, 0x04, // $40: TL
+      0x5F, 0x19, 0x9E, 0x1C, // $50: RS|AR
+      0x89, 0x00, 0x06, 0x05, // $60: AM|DR
+      0x04, 0x00, 0x02, 0x01, // $70: SR
+      0x38, 0x07, 0x26, 0x15, // $80: SL|RR
+      0x0C, 0x00, 0x00, 0x0B, // $90: SSG-EG
+      0x1C,                   // $B0: alg=4, fb=3
+      0x25,                   // $B4: fms=5, ams=2
+      'Y', 'I',
+  };
+
+  auto result = tyi::parse(bytes, sizeof(bytes), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  // Unlike EIF, TYI carries FMS/AMS.
+  ASSERT_EQ(p.fms, 5);
+  ASSERT_EQ(p.ams, 2);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_EQ(p.lfo_frequency, 0);
+  ASSERT_TRUE(!p.dac_enable);
+  // The $B4 panning bits are clear in the file but must not mute.
+  ASSERT_TRUE(p.left && p.right);
+
+  // OP0: 0x12 = DT 1, MUL 2; 0x5F = RS 1, AR 31; 0x89 = AM, DR 9;
+  //      0x38 = SL 3, RR 8; SSG 0x0C = enabled mode 4.
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+  ASSERT_TRUE(p.operators[0].enable);
+
+  // OP1: 0x71 = DT 7 (-3, hardware encoding preserved), MUL 1.
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  ASSERT_EQ(p.operators[1].tl, 0);
+  ASSERT_EQ(p.operators[1].ar, 25);
+  ASSERT_TRUE(!p.operators[1].am);
+  ASSERT_EQ(p.operators[1].rr, 7);
+  ASSERT_TRUE(!p.operators[1].ssg_enable);
+
+  // OP2: 0x9E = RS 2, AR 30.
+  ASSERT_EQ(p.operators[2].dt, 0);
+  ASSERT_EQ(p.operators[2].ml, 4);
+  ASSERT_EQ(p.operators[2].tl, 20);
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+  ASSERT_EQ(p.operators[2].dr, 6);
+  ASSERT_EQ(p.operators[2].sr, 2);
+  ASSERT_EQ(p.operators[2].sl, 2);
+  ASSERT_EQ(p.operators[2].rr, 6);
+
+  // OP3: 0x41 = DT 4 (-0), MUL 1; SSG 0x0B = enabled mode 3.
+  ASSERT_EQ(p.operators[3].dt, 4);
+  ASSERT_EQ(p.operators[3].ml, 1);
+  ASSERT_EQ(p.operators[3].tl, 4);
+  ASSERT_EQ(p.operators[3].ar, 28);
+  ASSERT_EQ(p.operators[3].dr, 5);
+  ASSERT_EQ(p.operators[3].sr, 1);
+  ASSERT_EQ(p.operators[3].sl, 1);
+  ASSERT_EQ(p.operators[3].rr, 5);
+  ASSERT_TRUE(p.operators[3].ssg_enable);
+  ASSERT_EQ(p.operators[3].ssg, 3);
+  return true;
+}
+
+bool test_tyi_roundtrip_synthesized() {
+  // TYI stores raw register values, so detune must round-trip in full
+  // hardware encoding — including the 0 (+0) vs 4 (-0) distinction that
+  // the linear formats (TFI/VGI) collapse.
+  Patch original;
+  original.name = "rt";
+  original.algorithm = 6;
+  original.feedback = 1;
+  original.fms = 5;
+  original.ams = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (15 - i) & 0x0F;
+    static const uint8_t dt_hw[] = {0, 4, 7, 3}; // +0, -0, -3, +3
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(127 - i * 13);
+    o.ks = static_cast<uint8_t>(i);
+    o.ar = static_cast<uint8_t>(31 - i * 2);
+    o.dr = static_cast<uint8_t>(i * 7);
+    o.sr = static_cast<uint8_t>(i * 5);
+    o.rr = static_cast<uint8_t>(15 - i);
+    o.sl = static_cast<uint8_t>(i * 4);
+    o.am = (i == 0 || i == 3);
+    o.ssg_enable = (i == 1 || i == 2);
+    o.ssg = (i == 2) ? 7 : 0;
+    o.enable = true;
+  }
+
+  auto ser = tyi::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(32));
+  ASSERT_EQ(bytes[30], 'Y');
+  ASSERT_EQ(bytes[31], 'I');
+
+  auto parsed = tyi::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  if (!patches_strict_equal(original, p)) {
+    print_patch_diff(original, p);
+    return false;
+  }
+  return true;
+}
+
+bool test_tyi_sniff_rejects_non_tyi() {
+  // Wrong size — reject.
+  std::vector<uint8_t> too_small(31, 0);
+  too_small[29] = 'Y';
+  too_small[30] = 'I';
+  ASSERT_TRUE(!is_ok(tyi::parse(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(33, 0);
+  too_big[31] = 'Y';
+  too_big[32] = 'I';
+  ASSERT_TRUE(!is_ok(tyi::parse(too_big.data(), too_big.size())));
+
+  // Right size, but the signature bytes are wrong.
+  std::vector<uint8_t> bad_first(32, 0);
+  bad_first[30] = 'X';
+  bad_first[31] = 'I';
+  ASSERT_TRUE(!is_ok(tyi::parse(bad_first.data(), bad_first.size())));
+
+  std::vector<uint8_t> bad_second(32, 0);
+  bad_second[30] = 'Y';
+  bad_second[31] = 'X';
+  ASSERT_TRUE(!is_ok(tyi::parse(bad_second.data(), bad_second.size())));
+
+  // All-zero: valid register ranges, but no signature.
+  std::vector<uint8_t> all_zero(32, 0);
+  ASSERT_TRUE(!is_ok(tyi::parse(all_zero.data(), all_zero.size())));
+
+  // Signature present, but unused bits set in the $B0 byte.
+  std::vector<uint8_t> bad_b0(32, 0);
+  bad_b0[28] = 0x40;
+  bad_b0[30] = 'Y';
+  bad_b0[31] = 'I';
+  ASSERT_TRUE(!is_ok(tyi::parse(bad_b0.data(), bad_b0.size())));
+
+  // Signature present, but TL out of 7-bit range.
+  std::vector<uint8_t> bad_tl(32, 0);
+  bad_tl[4] = 0x80;
+  bad_tl[30] = 'Y';
+  bad_tl[31] = 'I';
+  ASSERT_TRUE(!is_ok(tyi::parse(bad_tl.data(), bad_tl.size())));
+
+  // Signature plus valid ranges — accepted.
+  std::vector<uint8_t> minimal(32, 0);
+  minimal[30] = 'Y';
+  minimal[31] = 'I';
+  ASSERT_TRUE(is_ok(tyi::parse(minimal.data(), minimal.size())));
+  return true;
+}
+
+bool test_tyi_via_high_level() {
+  auto f = format_from_string("tyi");
+  ASSERT_TRUE(f.has_value() && *f == Format::Tyi);
+  auto f_upper = format_from_string(".TYI");
+  ASSERT_TRUE(f_upper.has_value() && *f_upper == Format::Tyi);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Tyi)) == "tyi");
+
+  Patch p;
+  p.algorithm = 7;
+  p.feedback = 4;
+  p.fms = 3;
+  p.ams = 1;
+  for (int i = 0; i < 4; ++i) {
+    p.operators[i].ar = 31;
+    p.operators[i].tl = 20;
+  }
+  auto ser = serialize(Format::Tyi, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(32));
+
+  auto parsed = parse(get_ok(ser).data(), get_ok(ser).size(), Format::Tyi,
+                      "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 7);
+  ASSERT_EQ(get_ok(parsed).patches[0].fms, 3);
+  ASSERT_EQ(get_ok(parsed).patches[0].ams, 1);
+
+  // Hint-less auto-detection must also find it.
+  auto auto_parsed = parse(get_ok(ser).data(), get_ok(ser).size(),
+                           std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(auto_parsed));
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].algorithm, 7);
+  return true;
+}
+
+bool test_tyi_spat_no_sniff_collision() {
+  // TYI and SPAT are both 32 bytes, so their sniffers must not overlap.
+  Patch p;
+  p.name = "collide";
+  p.algorithm = 6;
+  p.feedback = 1;
+  p.fms = 5;
+  p.ams = 2;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = p.operators[i];
+    o.ml = 15;
+    o.dt = 3;
+    o.tl = 20;
+    o.ar = 31;
+    o.enable = true;
+  }
+
+  auto spat_ser = spat::serialize(p); // FMS/AMS dropped
+  auto tyi_ser = tyi::serialize(p);
+  ASSERT_TRUE(is_ok(spat_ser));
+  ASSERT_TRUE(is_ok(tyi_ser));
+  const auto &spat_bytes = get_ok(spat_ser);
+  const auto &tyi_bytes = get_ok(tyi_ser);
+  ASSERT_EQ(spat_bytes.size(), static_cast<size_t>(32));
+  ASSERT_EQ(tyi_bytes.size(), static_cast<size_t>(32));
+
+  // Neither sniffer accepts the other's file.
+  ASSERT_TRUE(!is_ok(tyi::parse(spat_bytes.data(), spat_bytes.size())));
+  ASSERT_TRUE(!is_ok(spat::parse(tyi_bytes.data(), tyi_bytes.size())));
+
+  // Auto-detection picks the right one: $B0 sits at byte 0x00 in SPAT
+  // and at byte 0x1C in TYI, so a mix-up would change the algorithm.
+  auto spat_auto =
+      parse(spat_bytes.data(), spat_bytes.size(), std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(spat_auto));
+  ASSERT_EQ(get_ok(spat_auto).patches[0].algorithm, 6);
+  ASSERT_EQ(get_ok(spat_auto).patches[0].feedback, 1);
+  ASSERT_EQ(get_ok(spat_auto).patches[0].fms, 0);
+
+  auto tyi_auto =
+      parse(tyi_bytes.data(), tyi_bytes.size(), std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(tyi_auto));
+  ASSERT_EQ(get_ok(tyi_auto).patches[0].algorithm, 6);
+  ASSERT_EQ(get_ok(tyi_auto).patches[0].feedback, 1);
+  ASSERT_EQ(get_ok(tyi_auto).patches[0].fms, 5);
+  return true;
+}
+
+// ---- Y12 parse/serialize tests ----
+
+/// Build a 128-byte Y12 from four 7-byte operator blocks plus the
+/// unpacked algorithm and feedback bytes.
+static std::vector<uint8_t> make_y12(const uint8_t blocks[4][7],
+                                     uint8_t algorithm, uint8_t feedback) {
+  std::vector<uint8_t> data(128, 0);
+  for (int op = 0; op < 4; ++op)
+    for (int i = 0; i < 7; ++i)
+      data[op * 16 + i] = blocks[op][i];
+  data[0x40] = algorithm;
+  data[0x41] = feedback;
+  return data;
+}
+
+bool test_y12_parse_synthesized() {
+  // One 16-byte block per operator: $30, $40, $50, $60, $70, $80, $90.
+  const uint8_t blocks[4][7] = {
+      {0x12, 0x26, 0x5F, 0x89, 0x04, 0x38, 0x0C},
+      {0x71, 0x00, 0x19, 0x00, 0x00, 0x07, 0x00},
+      {0x04, 0x14, 0x9E, 0x06, 0x02, 0x26, 0x0B},
+      {0x41, 0x04, 0x1C, 0x05, 0x01, 0x15, 0x00},
+  };
+  auto bytes = make_y12(blocks, 4, 3);
+
+  // The three trailing strings hold the ROM name and are ignored.
+  const char *rom = "Test ROM (U) [!]";
+  for (size_t off = 0x50; off <= 0x70; off += 0x10)
+    std::memcpy(bytes.data() + off, rom, std::strlen(rom));
+
+  auto result = y12::parse(bytes.data(), bytes.size(), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  // The patch name comes from the filename, not the ROM strings.
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_EQ(p.lfo_frequency, 0);
+  ASSERT_TRUE(!p.dac_enable);
+  ASSERT_TRUE(p.left && p.right);
+
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+  ASSERT_TRUE(p.operators[0].enable);
+
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  ASSERT_EQ(p.operators[1].ar, 25);
+  ASSERT_TRUE(!p.operators[1].am);
+  ASSERT_TRUE(!p.operators[1].ssg_enable);
+
+  ASSERT_EQ(p.operators[2].ml, 4);
+  ASSERT_EQ(p.operators[2].tl, 20);
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+  ASSERT_TRUE(p.operators[2].ssg_enable);
+  ASSERT_EQ(p.operators[2].ssg, 3);
+
+  ASSERT_EQ(p.operators[3].dt, 4);
+  ASSERT_EQ(p.operators[3].ml, 1);
+  ASSERT_EQ(p.operators[3].tl, 4);
+  ASSERT_EQ(p.operators[3].ar, 28);
+  ASSERT_EQ(p.operators[3].sl, 1);
+  ASSERT_EQ(p.operators[3].rr, 5);
+  return true;
+}
+
+bool test_y12_roundtrip_synthesized() {
+  Patch original;
+  original.name = "rt";
+  original.algorithm = 6;
+  original.feedback = 1;
+  for (int i = 0; i < 4; ++i) {
+    auto &o = original.operators[i];
+    o.ml = (15 - i) & 0x0F;
+    static const uint8_t dt_hw[] = {0, 4, 7, 3}; // +0, -0, -3, +3
+    o.dt = dt_hw[i];
+    o.tl = static_cast<uint8_t>(127 - i * 13);
+    o.ks = static_cast<uint8_t>(i);
+    o.ar = static_cast<uint8_t>(31 - i * 2);
+    o.dr = static_cast<uint8_t>(i * 7);
+    o.sr = static_cast<uint8_t>(i * 5);
+    o.rr = static_cast<uint8_t>(15 - i);
+    o.sl = static_cast<uint8_t>(i * 4);
+    o.am = (i == 0 || i == 3);
+    o.ssg_enable = (i == 1 || i == 2);
+    o.ssg = (i == 2) ? 7 : 0;
+    o.enable = true;
+  }
+
+  auto ser = y12::serialize(original);
+  ASSERT_TRUE(is_ok(ser));
+  const auto &bytes = get_ok(ser);
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(128));
+
+  // Algorithm and feedback are separate unpacked bytes, not a $B0 pair.
+  ASSERT_EQ(bytes[0x40], original.algorithm);
+  ASSERT_EQ(bytes[0x41], original.feedback);
+
+  // Reserved tail of each operator block stays zero.
+  for (int op = 0; op < 4; ++op)
+    for (size_t i = 7; i < 16; ++i)
+      ASSERT_EQ(bytes[op * 16 + i], 0);
+
+  // Reserved bytes and the ROM-name strings stay zero.
+  for (size_t i = 0x42; i < 0x80; ++i)
+    ASSERT_EQ(bytes[i], 0);
+
+  auto parsed = y12::parse(bytes.data(), bytes.size(), "rt");
+  ASSERT_TRUE(is_ok(parsed));
+  const auto &p = get_ok(parsed).patches[0];
+
+  if (!patches_strict_equal(original, p)) {
+    print_patch_diff(original, p);
+    return false;
+  }
+  return true;
+}
+
+bool test_y12_sniff_rejects_non_y12() {
+  // Wrong size — reject.
+  std::vector<uint8_t> too_small(127, 0);
+  ASSERT_TRUE(!is_ok(y12::parse(too_small.data(), too_small.size())));
+  std::vector<uint8_t> too_big(129, 0);
+  ASSERT_TRUE(!is_ok(y12::parse(too_big.data(), too_big.size())));
+
+  // Reserved byte inside an operator block is non-zero.
+  std::vector<uint8_t> bad_block_reserved(128, 0);
+  bad_block_reserved[0x10 + 9] = 0x01;
+  ASSERT_TRUE(!is_ok(
+      y12::parse(bad_block_reserved.data(), bad_block_reserved.size())));
+
+  // Reserved byte between the feedback byte and the strings is non-zero.
+  std::vector<uint8_t> bad_reserved(128, 0);
+  bad_reserved[0x4F] = 0xFF;
+  ASSERT_TRUE(!is_ok(y12::parse(bad_reserved.data(), bad_reserved.size())));
+
+  // Algorithm and feedback are 3-bit values in their own bytes.
+  std::vector<uint8_t> bad_algorithm(128, 0);
+  bad_algorithm[0x40] = 8;
+  ASSERT_TRUE(!is_ok(y12::parse(bad_algorithm.data(), bad_algorithm.size())));
+
+  std::vector<uint8_t> bad_feedback(128, 0);
+  bad_feedback[0x41] = 8;
+  ASSERT_TRUE(!is_ok(y12::parse(bad_feedback.data(), bad_feedback.size())));
+
+  // TL out of 7-bit range.
+  std::vector<uint8_t> bad_tl(128, 0);
+  bad_tl[0x21] = 0x80;
+  ASSERT_TRUE(!is_ok(y12::parse(bad_tl.data(), bad_tl.size())));
+
+  // The string region is never validated: arbitrary text is fine.
+  std::vector<uint8_t> with_strings(128, 0);
+  const char *rom = "Some ROM Name!!!";
+  for (size_t off = 0x50; off <= 0x70; off += 0x10)
+    std::memcpy(with_strings.data() + off, rom, std::strlen(rom));
+  ASSERT_TRUE(is_ok(y12::parse(with_strings.data(), with_strings.size())));
+  return true;
+}
+
+bool test_y12_via_high_level() {
+  auto f = format_from_string("y12");
+  ASSERT_TRUE(f.has_value() && *f == Format::Y12);
+  auto f_upper = format_from_string(".Y12");
+  ASSERT_TRUE(f_upper.has_value() && *f_upper == Format::Y12);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Y12)) == "y12");
+
+  Patch p;
+  p.algorithm = 7;
+  p.feedback = 4;
+  for (int i = 0; i < 4; ++i) {
+    p.operators[i].ar = 31;
+    p.operators[i].tl = 20;
+  }
+  auto ser = serialize(Format::Y12, p);
+  ASSERT_TRUE(is_ok(ser));
+  ASSERT_EQ(get_ok(ser).size(), static_cast<size_t>(128));
+
+  auto parsed = parse(get_ok(ser).data(), get_ok(ser).size(), Format::Y12,
+                      "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 7);
+
+  // Hint-less auto-detection must also find it.
+  auto auto_parsed = parse(get_ok(ser).data(), get_ok(ser).size(),
+                           std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(auto_parsed));
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].algorithm, 7);
+  return true;
+}
+
+// ---- DAT parse tests ----
+
+/// Build a DAT file from a flat (register, value, register, value, ...)
+/// list, prefixing the big-endian pair count.
+static std::vector<uint8_t> make_dat(const std::vector<uint8_t> &pairs) {
+  size_t count = pairs.size() / 2;
+  std::vector<uint8_t> data;
+  data.push_back(static_cast<uint8_t>(count >> 8));
+  data.push_back(static_cast<uint8_t>(count & 0xFF));
+  data.insert(data.end(), pairs.begin(), pairs.end());
+  return data;
+}
+
+bool test_dat_parse_synthesized() {
+  auto bytes = make_dat({
+      0x30, 0x12, 0x34, 0x71, 0x38, 0x04, 0x3C, 0x41, // $30 group
+      0x40, 0x26, 0x44, 0x00, 0x48, 0x14, 0x4C, 0x04, // $40 group
+      0x50, 0x5F, 0x54, 0x19, 0x58, 0x9E, 0x5C, 0x1C, // $50 group
+      0x60, 0x89, 0x64, 0x00, 0x68, 0x06, 0x6C, 0x05, // $60 group
+      0x70, 0x04, 0x74, 0x00, 0x78, 0x02, 0x7C, 0x01, // $70 group
+      0x80, 0x38, 0x84, 0x07, 0x88, 0x26, 0x8C, 0x15, // $80 group
+      0xB0, 0x1C,                                     // alg=4, fb=3
+  });
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(52));
+  ASSERT_EQ(bytes[0], 0);
+  ASSERT_EQ(bytes[1], 25);
+
+  auto result = dat::parse(bytes.data(), bytes.size(), "synth");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  ASSERT_TRUE(p.name == "synth");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  // $90 and $B4 are absent from the list — defaults.
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_TRUE(!p.dac_enable);
+  ASSERT_TRUE(p.left && p.right);
+
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(!p.operators[0].ssg_enable);
+  ASSERT_TRUE(p.operators[0].enable);
+
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  ASSERT_EQ(p.operators[1].ar, 25);
+  ASSERT_TRUE(!p.operators[1].am);
+  ASSERT_EQ(p.operators[1].rr, 7);
+
+  ASSERT_EQ(p.operators[2].ml, 4);
+  ASSERT_EQ(p.operators[2].tl, 20);
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+  ASSERT_EQ(p.operators[2].dr, 6);
+  ASSERT_EQ(p.operators[2].sr, 2);
+
+  ASSERT_EQ(p.operators[3].dt, 4);
+  ASSERT_EQ(p.operators[3].ml, 1);
+  ASSERT_EQ(p.operators[3].tl, 4);
+  ASSERT_EQ(p.operators[3].ar, 28);
+  ASSERT_EQ(p.operators[3].sl, 1);
+  ASSERT_EQ(p.operators[3].rr, 5);
+  return true;
+}
+
+bool test_dat_partial_register_list() {
+  // Only $B0 plus two operator registers — everything else defaults.
+  auto bytes = make_dat({0x40, 0x2A, 0x50, 0x9F, 0xB0, 0x0D});
+
+  auto result = dat::parse(bytes.data(), bytes.size(), "partial");
+  ASSERT_TRUE(is_ok(result));
+  const auto &p = get_ok(result).patches[0];
+
+  ASSERT_EQ(p.algorithm, 5);
+  ASSERT_EQ(p.feedback, 1);
+  ASSERT_EQ(p.operators[0].tl, 42);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_EQ(p.operators[0].ks, 2);
+
+  // Registers absent from the list keep their Patch defaults.
+  ASSERT_EQ(p.operators[0].ml, 0);
+  ASSERT_EQ(p.operators[0].dt, 0);
+  ASSERT_EQ(p.operators[0].dr, 0);
+  ASSERT_EQ(p.operators[0].sr, 0);
+  ASSERT_EQ(p.operators[0].rr, 0);
+  ASSERT_EQ(p.operators[0].sl, 0);
+  ASSERT_TRUE(!p.operators[0].am);
+  ASSERT_TRUE(!p.operators[0].ssg_enable);
+  for (int i = 1; i < 4; ++i) {
+    ASSERT_EQ(p.operators[i].tl, 0);
+    ASSERT_EQ(p.operators[i].ar, 0);
+    ASSERT_TRUE(p.operators[i].enable);
+  }
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  return true;
+}
+
+bool test_dat_optional_registers() {
+  // $90 carries SSG-EG, $B4 carries FMS/AMS.
+  auto bytes = make_dat({0x90, 0x0C, 0x94, 0x0B, 0xB0, 0x1C, 0xB4, 0x25});
+
+  auto result = dat::parse(bytes.data(), bytes.size(), "optional");
+  ASSERT_TRUE(is_ok(result));
+  const auto &p = get_ok(result).patches[0];
+
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  ASSERT_TRUE(p.operators[0].ssg_enable);
+  ASSERT_EQ(p.operators[0].ssg, 4);
+  ASSERT_TRUE(p.operators[1].ssg_enable);
+  ASSERT_EQ(p.operators[1].ssg, 3);
+  ASSERT_TRUE(!p.operators[2].ssg_enable);
+  ASSERT_EQ(p.fms, 5);
+  ASSERT_EQ(p.ams, 2);
+  // The $B4 panning bits are ignored.
+  ASSERT_TRUE(p.left && p.right);
+  return true;
+}
+
+bool test_dat_sniff_rejects_non_dat() {
+  // Too small to hold a count plus one pair.
+  std::vector<uint8_t> tiny = {0x00, 0x01, 0xB0};
+  ASSERT_TRUE(!is_ok(dat::parse(tiny.data(), tiny.size())));
+
+  // A zero pair count.
+  std::vector<uint8_t> no_pairs = {0x00, 0x00, 0xB0, 0x1C};
+  ASSERT_TRUE(!is_ok(dat::parse(no_pairs.data(), no_pairs.size())));
+
+  // Pair count does not match the file size.
+  auto bad_count = make_dat({0xB0, 0x1C});
+  bad_count[1] = 25;
+  ASSERT_TRUE(!is_ok(dat::parse(bad_count.data(), bad_count.size())));
+
+  // Register addresses must ascend strictly.
+  auto descending = make_dat({0x40, 0x2A, 0x30, 0x12, 0xB0, 0x1C});
+  ASSERT_TRUE(!is_ok(dat::parse(descending.data(), descending.size())));
+
+  auto duplicated = make_dat({0x30, 0x12, 0x30, 0x12, 0xB0, 0x1C});
+  ASSERT_TRUE(!is_ok(dat::parse(duplicated.data(), duplicated.size())));
+
+  // Operator registers use the low two bits as the operator index, so
+  // only multiples of 4 are valid.
+  auto misaligned = make_dat({0x31, 0x12, 0xB0, 0x1C});
+  ASSERT_TRUE(!is_ok(dat::parse(misaligned.data(), misaligned.size())));
+
+  // Address outside the ranges the format may carry.
+  auto bad_address = make_dat({0xA0, 0x12, 0xB0, 0x1C});
+  ASSERT_TRUE(!is_ok(dat::parse(bad_address.data(), bad_address.size())));
+
+  // TL out of 7-bit range.
+  auto bad_value = make_dat({0x40, 0x80, 0xB0, 0x1C});
+  ASSERT_TRUE(!is_ok(dat::parse(bad_value.data(), bad_value.size())));
+
+  // $B0 must be present.
+  auto no_algorithm = make_dat({0x30, 0x12, 0x40, 0x26});
+  ASSERT_TRUE(!is_ok(dat::parse(no_algorithm.data(), no_algorithm.size())));
+  return true;
+}
+
+bool test_dat_via_high_level() {
+  auto f = format_from_string("dat");
+  ASSERT_TRUE(f.has_value() && *f == Format::Dat);
+  auto f_upper = format_from_string(".DAT");
+  ASSERT_TRUE(f_upper.has_value() && *f_upper == Format::Dat);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Dat)) == "dat");
+
+  // Read-only: the high-level serializer reports the missing writer.
+  Patch p;
+  p.algorithm = 4;
+  auto ser = serialize(Format::Dat, p);
+  ASSERT_TRUE(!is_ok(ser));
+  ASSERT_TRUE(get_error(ser).message ==
+              "Format 'dat' does not support writing");
+
+  auto bytes = make_dat({
+      0x30, 0x12, 0x34, 0x71, 0x38, 0x04, 0x3C, 0x41,
+      0x40, 0x26, 0x44, 0x00, 0x48, 0x14, 0x4C, 0x04,
+      0x50, 0x5F, 0x54, 0x19, 0x58, 0x9E, 0x5C, 0x1C,
+      0x60, 0x89, 0x64, 0x00, 0x68, 0x06, 0x6C, 0x05,
+      0x70, 0x04, 0x74, 0x00, 0x78, 0x02, 0x7C, 0x01,
+      0x80, 0x38, 0x84, 0x07, 0x88, 0x26, 0x8C, 0x15,
+      0xB0, 0x1C,
+  });
+
+  auto parsed = parse(bytes.data(), bytes.size(), Format::Dat, "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 4);
+
+  // Hint-less auto-detection must also find it.
+  auto auto_parsed = parse(bytes.data(), bytes.size(), std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(auto_parsed));
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].algorithm, 4);
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].feedback, 3);
+  return true;
+}
+
+// ---- INS parse tests ----
+
+/// The 25 bytes of register data that follow the NUL-terminated name.
+static std::vector<uint8_t> ins_body() {
+  return {
+      0x12, 0x71, 0x04, 0x41, // $30: DT|MUL per op
+      0x26, 0x00, 0x14, 0x04, // $40: TL
+      0x5F, 0x19, 0x9E, 0x1C, // $50: RS|AR
+      0x89, 0x00, 0x06, 0x05, // $60: AM|DR
+      0x04, 0x00, 0x02, 0x01, // $70: SR
+      0x38, 0x07, 0x26, 0x15, // $80: SL|RR
+      0x1C,                   // $B0: alg=4, fb=3
+  };
+}
+
+/// Build an INS file: "MVSI1", a NUL-terminated name, then the body.
+static std::vector<uint8_t> make_ins(const std::string &name,
+                                     const std::vector<uint8_t> &body) {
+  std::vector<uint8_t> data = {'M', 'V', 'S', 'I', '1'};
+  data.insert(data.end(), name.begin(), name.end());
+  data.push_back(0);
+  data.insert(data.end(), body.begin(), body.end());
+  return data;
+}
+
+bool test_ins_parse_synthesized() {
+  auto bytes = make_ins("Slap Bass", ins_body());
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(5 + 9 + 1 + 25));
+
+  auto result = ins::parse(bytes.data(), bytes.size(), "fallback");
+  ASSERT_TRUE(is_ok(result));
+  const auto &ok = get_ok(result);
+  ASSERT_EQ(ok.patches.size(), static_cast<size_t>(1));
+
+  const auto &p = ok.patches[0];
+  // The name comes from the file, not from the fallback.
+  ASSERT_TRUE(p.name == "Slap Bass");
+  ASSERT_EQ(p.algorithm, 4);
+  ASSERT_EQ(p.feedback, 3);
+  // The format carries no SSG-EG and no FMS/AMS.
+  ASSERT_EQ(p.fms, 0);
+  ASSERT_EQ(p.ams, 0);
+  ASSERT_TRUE(!p.lfo_enable);
+  ASSERT_TRUE(!p.dac_enable);
+  ASSERT_TRUE(p.left && p.right);
+
+  ASSERT_EQ(p.operators[0].dt, 1);
+  ASSERT_EQ(p.operators[0].ml, 2);
+  ASSERT_EQ(p.operators[0].tl, 38);
+  ASSERT_EQ(p.operators[0].ks, 1);
+  ASSERT_EQ(p.operators[0].ar, 31);
+  ASSERT_TRUE(p.operators[0].am);
+  ASSERT_EQ(p.operators[0].dr, 9);
+  ASSERT_EQ(p.operators[0].sr, 4);
+  ASSERT_EQ(p.operators[0].sl, 3);
+  ASSERT_EQ(p.operators[0].rr, 8);
+  ASSERT_TRUE(p.operators[0].enable);
+
+  ASSERT_EQ(p.operators[1].dt, 7);
+  ASSERT_EQ(p.operators[1].ml, 1);
+  ASSERT_EQ(p.operators[1].ar, 25);
+  ASSERT_TRUE(!p.operators[1].am);
+
+  ASSERT_EQ(p.operators[2].ml, 4);
+  ASSERT_EQ(p.operators[2].tl, 20);
+  ASSERT_EQ(p.operators[2].ks, 2);
+  ASSERT_EQ(p.operators[2].ar, 30);
+
+  ASSERT_EQ(p.operators[3].dt, 4);
+  ASSERT_EQ(p.operators[3].ml, 1);
+  ASSERT_EQ(p.operators[3].tl, 4);
+  ASSERT_EQ(p.operators[3].sl, 1);
+  ASSERT_EQ(p.operators[3].rr, 5);
+
+  for (int i = 0; i < 4; ++i) {
+    ASSERT_TRUE(!p.operators[i].ssg_enable);
+    ASSERT_EQ(p.operators[i].ssg, 0);
+  }
+  return true;
+}
+
+bool test_ins_empty_name_uses_fallback() {
+  auto bytes = make_ins("", ins_body());
+  ASSERT_EQ(bytes.size(), static_cast<size_t>(31));
+
+  auto result = ins::parse(bytes.data(), bytes.size(), "from_filename");
+  ASSERT_TRUE(is_ok(result));
+  ASSERT_TRUE(get_ok(result).patches[0].name == "from_filename");
+  ASSERT_EQ(get_ok(result).patches[0].algorithm, 4);
+  return true;
+}
+
+bool test_ins_sniff_rejects_non_ins() {
+  // Wrong signature.
+  auto bad_magic = make_ins("x", ins_body());
+  bad_magic[4] = '2';
+  ASSERT_TRUE(!is_ok(ins::parse(bad_magic.data(), bad_magic.size())));
+
+  // No NUL terminating the name.
+  std::vector<uint8_t> unterminated(40, 0xFF);
+  std::memcpy(unterminated.data(), "MVSI1", 5);
+  ASSERT_TRUE(!is_ok(ins::parse(unterminated.data(), unterminated.size())));
+
+  // Body one byte short, and one byte long.
+  auto body_short = ins_body();
+  body_short.pop_back();
+  auto short_file = make_ins("x", body_short);
+  ASSERT_TRUE(!is_ok(ins::parse(short_file.data(), short_file.size())));
+
+  auto body_long = ins_body();
+  body_long.push_back(0x00);
+  auto long_file = make_ins("x", body_long);
+  ASSERT_TRUE(!is_ok(ins::parse(long_file.data(), long_file.size())));
+
+  // TL out of 7-bit range.
+  auto body_bad = ins_body();
+  body_bad[4] = 0x80;
+  auto bad_value = make_ins("x", body_bad);
+  ASSERT_TRUE(!is_ok(ins::parse(bad_value.data(), bad_value.size())));
+
+  // Shorter than signature + empty name + body.
+  std::vector<uint8_t> too_small(30, 0);
+  std::memcpy(too_small.data(), "MVSI1", 5);
+  ASSERT_TRUE(!is_ok(ins::parse(too_small.data(), too_small.size())));
+  return true;
+}
+
+bool test_ins_via_high_level() {
+  auto f = format_from_string("ins");
+  ASSERT_TRUE(f.has_value() && *f == Format::Ins);
+  auto f_upper = format_from_string(".INS");
+  ASSERT_TRUE(f_upper.has_value() && *f_upper == Format::Ins);
+  ASSERT_TRUE(std::string(format_to_extension(Format::Ins)) == "ins");
+
+  // Read-only: the high-level serializer reports the missing writer.
+  Patch p;
+  p.algorithm = 4;
+  auto ser = serialize(Format::Ins, p);
+  ASSERT_TRUE(!is_ok(ser));
+  ASSERT_TRUE(get_error(ser).message ==
+              "Format 'ins' does not support writing");
+
+  auto bytes = make_ins("Lead", ins_body());
+  auto parsed = parse(bytes.data(), bytes.size(), Format::Ins, "hl");
+  ASSERT_TRUE(is_ok(parsed));
+  ASSERT_EQ(get_ok(parsed).patches[0].algorithm, 4);
+  ASSERT_TRUE(get_ok(parsed).patches[0].name == "Lead");
+
+  // Hint-less auto-detection must also find it.
+  auto auto_parsed = parse(bytes.data(), bytes.size(), std::nullopt, "auto");
+  ASSERT_TRUE(is_ok(auto_parsed));
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].algorithm, 4);
+  ASSERT_EQ(get_ok(auto_parsed).patches[0].feedback, 3);
+  return true;
+}
+
 // ---- VGM extraction tests ----
 
 /// Build a minimal v1.50 VGM around the given command stream (0x66
@@ -2997,6 +3833,32 @@ int main() {
   RUN_TEST(test_spat_matches_eif_prefix);
   RUN_TEST(test_spat_sniff_rejects_non_spat);
   RUN_TEST(test_spat_via_high_level);
+
+  std::cout << "\n=== TYI parse/serialize ===\n";
+  RUN_TEST(test_tyi_parse_synthesized);
+  RUN_TEST(test_tyi_roundtrip_synthesized);
+  RUN_TEST(test_tyi_sniff_rejects_non_tyi);
+  RUN_TEST(test_tyi_via_high_level);
+  RUN_TEST(test_tyi_spat_no_sniff_collision);
+
+  std::cout << "\n=== Y12 parse/serialize ===\n";
+  RUN_TEST(test_y12_parse_synthesized);
+  RUN_TEST(test_y12_roundtrip_synthesized);
+  RUN_TEST(test_y12_sniff_rejects_non_y12);
+  RUN_TEST(test_y12_via_high_level);
+
+  std::cout << "\n=== DAT parse ===\n";
+  RUN_TEST(test_dat_parse_synthesized);
+  RUN_TEST(test_dat_partial_register_list);
+  RUN_TEST(test_dat_optional_registers);
+  RUN_TEST(test_dat_sniff_rejects_non_dat);
+  RUN_TEST(test_dat_via_high_level);
+
+  std::cout << "\n=== INS parse ===\n";
+  RUN_TEST(test_ins_parse_synthesized);
+  RUN_TEST(test_ins_empty_name_uses_fallback);
+  RUN_TEST(test_ins_sniff_rejects_non_ins);
+  RUN_TEST(test_ins_via_high_level);
 
   std::cout << "\n=== VGM extraction ===\n";
   RUN_TEST(test_vgm_extract_basic);

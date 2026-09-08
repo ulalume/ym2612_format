@@ -17,6 +17,10 @@ A library and CLI for converting YM2612 FM instrument patch files between format
 | `.vgi`     | VGM Music Maker    |  o   |   o   |        | 43-byte OPN2 FM patch (TFI + FMS/AMS/AM)   |
 | `.eif`     | Echo               |  o   |   o   |        | 29-byte raw register dump                  |
 | `.spat`    | Sona               |  o   |   o   |        | 32-byte raw register dump (EIF + 3 reserved bytes) |
+| `.tyi`     | TYI                |  o   |   o   |        | 32-byte raw register dump (adds FMS/AMS, `YI` signature) |
+| `.y12`     | Gens KMod          |  o   |   o   |        | 128-byte channel dump; trailing strings hold the ROM name |
+| `.dat`     | YM2612 Instrument Editor |  o   |       |        | Register address/value list                |
+| `.ins`     | MVS Tracker MD     |  o   |       |        | `MVSI1` + name + 25-byte register dump; no SSG-EG |
 | `.vgm` / `.vgz` | VGM register log | o |       |        | Reconstructs FM instruments from YM2612 writes |
 | `.gin`     | GIN (JSON)         |  o   |   o   |   o    |                                            |
 | `.ginpkg`  | GINPKG (ZIP)       |  o   |       |        | Extracts all versions                      |
