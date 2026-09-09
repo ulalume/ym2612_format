@@ -8,7 +8,7 @@
 extern "C" {
 #endif
 
-/* Library version ("0.3.0"). Static storage; do not free. */
+/* Library version ("0.3.1"). Static storage; do not free. */
 const char *ym2612_version(void);
 
 /* JSON array of format descriptors:
