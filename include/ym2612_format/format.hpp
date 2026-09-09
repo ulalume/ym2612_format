@@ -24,6 +24,10 @@ enum class Format {
   Eif,     ///< Echo sound engine (.eif) — 29-byte raw register dump
   Vgm,     ///< VGM/VGZ register log (.vgm/.vgz) — read-only, extracts FM instruments
   Spat,    ///< Sona sound driver (.spat) — 32-byte raw register dump (EIF + 3 reserved bytes)
+  Tyi,     ///< TYI (.tyi) — 32-byte raw register dump with FMS/AMS and a "YI" signature
+  Y12,     ///< Gens KMod (.y12) — 128-byte raw channel dump
+  Dat,     ///< YM2612 Instrument Editor (.dat) — read-only, register address/value list
+  Ins,     ///< MVS Tracker MD (.ins) — read-only, MVSI1 + name + 25-byte register dump
 };
 
 /// Convert a string (extension with or without dot) to a Format.

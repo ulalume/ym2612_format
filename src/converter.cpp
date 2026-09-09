@@ -1,6 +1,7 @@
 #include "ym2612_format/converter.hpp"
 
 #include "ym2612_format/ctrmml.hpp"
+#include "ym2612_format/dat.hpp"
 #include "ym2612_format/dmf.hpp"
 #include "ym2612_format/dmp.hpp"
 #include "ym2612_format/eif.hpp"
@@ -8,12 +9,15 @@
 #include "ym2612_format/fur.hpp"
 #include "ym2612_format/gin.hpp"
 #include "ym2612_format/ginpkg.hpp"
+#include "ym2612_format/ins.hpp"
 #include "ym2612_format/opm.hpp"
 #include "ym2612_format/rym2612.hpp"
 #include "ym2612_format/spat.hpp"
 #include "ym2612_format/tfi.hpp"
+#include "ym2612_format/tyi.hpp"
 #include "ym2612_format/vgi.hpp"
 #include "ym2612_format/vgm.hpp"
+#include "ym2612_format/y12.hpp"
 
 #include <algorithm>
 #include <unordered_map>
@@ -42,6 +46,10 @@ std::optional<Format> format_from_string(const std::string &s) {
       {"vgm", Format::Vgm},
       {"vgz", Format::Vgm},
       {"spat", Format::Spat},
+      {"tyi", Format::Tyi},
+      {"y12", Format::Y12},
+      {"dat", Format::Dat},
+      {"ins", Format::Ins},
   };
   auto it = map.find(lower);
   if (it != map.end())
@@ -65,6 +73,10 @@ const char *format_to_extension(Format f) {
   case Format::Eif:     return "eif";
   case Format::Vgm:     return "vgm";
   case Format::Spat:    return "spat";
+  case Format::Tyi:     return "tyi";
+  case Format::Y12:     return "y12";
+  case Format::Dat:     return "dat";
+  case Format::Ins:     return "ins";
   }
   return "";
 }
@@ -112,8 +124,8 @@ FormatEntry make_entry(FormatInfo info,
 const std::vector<FormatEntry> &formats() {
   // Ordering rule for hint-less auto-detection: entries with magic
   // bytes come first, magic-less size/range-validated sniffers (tfi,
-  // vgi, eif, spat, dmp) after them.  Dmp stays last as the loosest of
-  // the magic-less sniffers.  Keep new formats above it.
+  // vgi, eif, tyi, spat, y12, dat, dmp) after them.  Dmp stays last as
+  // the loosest of the magic-less sniffers.  Keep new formats above it.
   static const std::vector<FormatEntry> entries = {
       make_entry(vgm::info(), vgm::parse, nullptr, nullptr),
       make_entry(dmf::info(), dmf::parse, nullptr, nullptr),
@@ -125,11 +137,15 @@ const std::vector<FormatEntry> &formats() {
                  ctrmml_serialize_text_wrapper),
       make_entry(fur::info(), fur::parse, nullptr, nullptr),
       make_entry(opm::info(), opm::parse, nullptr, nullptr),
+      make_entry(ins::info(), ins::parse, nullptr, nullptr),
       make_entry(tfi::info(), tfi::parse, tfi::serialize, nullptr,
                  tfi::parse_compatible),
       make_entry(vgi::info(), vgi::parse, vgi::serialize, nullptr),
       make_entry(eif::info(), eif::parse, eif::serialize, nullptr),
+      make_entry(tyi::info(), tyi::parse, tyi::serialize, nullptr),
       make_entry(spat::info(), spat::parse, spat::serialize, nullptr),
+      make_entry(y12::info(), y12::parse, y12::serialize, nullptr),
+      make_entry(dat::info(), dat::parse, nullptr, nullptr),
       // Loosest magic-less sniffer — stays last (see ordering rule).
       make_entry(dmp::info(), dmp::parse, dmp::serialize, nullptr,
                  dmp::parse_compatible),
