@@ -12,11 +12,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             target: arm64
             os_name: macos
             rust: true
-          - os: macos-14
+          - os: macos-15
             target: x86_64
             os_name: macos
           - os: ubuntu-22.04
@@ -43,7 +43,7 @@ jobs:
 
       # --- Configure ---
       - name: Configure (macOS)
-        if: matrix.os == 'macos-14'
+        if: matrix.os == 'macos-15'
         run: |
           cmake -S . -B build \
             -DCMAKE_BUILD_TYPE=Release \
