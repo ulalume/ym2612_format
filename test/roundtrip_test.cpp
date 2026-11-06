@@ -1496,6 +1496,32 @@ bool test_mml_serialize_text_lfo_pan() {
   return true;
 }
 
+/// An LFO depth without a rate writes the depth alone, and no depth writes
+/// nothing.
+bool test_mml_lfo_comment_without_rate() {
+  Patch patch;
+  patch.name = "LFO Depth Only";
+  patch.ams = 1;
+  patch.fms = 4;
+  patch.lfo_enable = false;
+  patch.lfo_frequency = 5;
+
+  auto result = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(result));
+  const auto &text = get_ok(result);
+  ASSERT_TRUE(text.find("lforate") == std::string::npos);
+  ASSERT_TRUE(text.find("; 'lfo 1 4' ; LFO") != std::string::npos);
+
+  patch.ams = 0;
+  patch.fms = 0;
+  patch.lfo_enable = true;
+  auto silent = ctrmml::serialize_text(patch);
+  ASSERT_TRUE(is_ok(silent));
+  ASSERT_TRUE(get_ok(silent).find("lfo") == std::string::npos);
+
+  return true;
+}
+
 /// Verify format_semitones edge cases via pitch macro output.
 bool test_mml_format_semitones_edge_cases() {
   Patch patch;
@@ -3879,6 +3905,7 @@ int main() {
   std::cout << "\n=== MML serialize_text exact output ===\n";
   RUN_TEST(test_mml_serialize_text_exact_format);
   RUN_TEST(test_mml_serialize_text_lfo_pan);
+  RUN_TEST(test_mml_lfo_comment_without_rate);
   RUN_TEST(test_mml_format_semitones_edge_cases);
   RUN_TEST(test_mml_parse_multiple_patches);
 

@@ -419,12 +419,17 @@ SerializeTextResult serialize_text(const Patch &patch) {
     out += buf;
   }
 
-  // LFO info as comment
+  // LFO info as comment, for a patch the LFO reaches; the rate only when the
+  // patch carries one.
   if (patch.ams != 0 || patch.fms != 0) {
-    std::snprintf(buf, sizeof(buf), "; 'lforate %d' 'lfo %d %d' ; LFO\n",
-                  patch.lfo_enable ? static_cast<int>(patch.lfo_frequency) + 1 : 0,
-                  static_cast<int>(patch.ams),
-                  static_cast<int>(patch.fms));
+    out += "; ";
+    if (patch.lfo_enable) {
+      std::snprintf(buf, sizeof(buf), "'lforate %d' ",
+                    static_cast<int>(patch.lfo_frequency) + 1);
+      out += buf;
+    }
+    std::snprintf(buf, sizeof(buf), "'lfo %d %d' ; LFO\n",
+                  static_cast<int>(patch.ams), static_cast<int>(patch.fms));
     out += buf;
   }
 
