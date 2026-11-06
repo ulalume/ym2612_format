@@ -354,6 +354,85 @@ bool test_dmp_to_gin_roundtrip() {
   return true;
 }
 
+bool test_gin_leaves_out_playback_settings() {
+  Patch patch;
+  patch.name = "played";
+  patch.dac_enable = true;
+  patch.lfo_enable = true;
+  patch.lfo_frequency = 5;
+  patch.left = false;
+  patch.right = true;
+  patch.ams = 2;
+  patch.fms = 3;
+  patch.operators[1].enable = false;
+
+  auto bytes_r = gin::serialize(patch);
+  ASSERT_TRUE(is_ok(bytes_r));
+  const auto &bytes = get_ok(bytes_r);
+  const std::string text(bytes.begin(), bytes.end());
+  ASSERT_TRUE(text.find("device") == std::string::npos);
+  ASSERT_TRUE(text.find("lfo_enable") == std::string::npos);
+  ASSERT_TRUE(text.find("lfo_frequency") == std::string::npos);
+  ASSERT_TRUE(text.find("left_speaker") == std::string::npos);
+  ASSERT_TRUE(text.find("right_speaker") == std::string::npos);
+  ASSERT_TRUE(text.find("\"enable\"") == std::string::npos);
+
+  auto parsed_r = gin::parse(bytes.data(), bytes.size());
+  ASSERT_TRUE(is_ok(parsed_r));
+  const auto &parsed = get_ok(parsed_r).patches[0];
+  ASSERT_EQ(parsed.ams, 2);
+  ASSERT_EQ(parsed.fms, 3);
+  ASSERT_TRUE(!parsed.dac_enable);
+  ASSERT_TRUE(!parsed.lfo_enable);
+  ASSERT_EQ(parsed.lfo_frequency, 0);
+  ASSERT_TRUE(parsed.left && parsed.right);
+  ASSERT_TRUE(parsed.operators[1].enable);
+  return true;
+}
+
+bool test_gin_ignores_stored_playback_settings() {
+  const std::string text = R"({
+    "name": "older",
+    "device": {"dac_enable": true, "lfo_enable": true, "lfo_frequency": 6},
+    "channel": {"left_speaker": false, "right_speaker": false,
+                "amplitude_modulation_sensitivity": 1,
+                "frequency_modulation_sensitivity": 4},
+    "instrument": {"feedback": 3, "algorithm": 4, "operators": [
+      {"attack_rate": 31, "decay_rate": 0, "sustain_rate": 0,
+       "release_rate": 7, "sustain_level": 0, "total_level": 20,
+       "key_scale": 0, "multiple": 1, "detune": 3,
+       "ssg_type_envelope_control": 0, "ssg_enable": false,
+       "amplitude_modulation_enable": false, "enable": false},
+      {"attack_rate": 31, "decay_rate": 0, "sustain_rate": 0,
+       "release_rate": 7, "sustain_level": 0, "total_level": 20,
+       "key_scale": 0, "multiple": 1, "detune": 3,
+       "ssg_type_envelope_control": 0, "ssg_enable": false,
+       "amplitude_modulation_enable": false, "enable": true},
+      {"attack_rate": 31, "decay_rate": 0, "sustain_rate": 0,
+       "release_rate": 7, "sustain_level": 0, "total_level": 20,
+       "key_scale": 0, "multiple": 1, "detune": 3,
+       "ssg_type_envelope_control": 0, "ssg_enable": false,
+       "amplitude_modulation_enable": false, "enable": true},
+      {"attack_rate": 31, "decay_rate": 0, "sustain_rate": 0,
+       "release_rate": 7, "sustain_level": 0, "total_level": 0,
+       "key_scale": 0, "multiple": 1, "detune": 3,
+       "ssg_type_envelope_control": 0, "ssg_enable": false,
+       "amplitude_modulation_enable": false, "enable": true}]}
+  })";
+  const auto *data = reinterpret_cast<const uint8_t *>(text.data());
+  auto parsed_r = gin::parse(data, text.size());
+  ASSERT_TRUE(is_ok(parsed_r));
+  const auto &parsed = get_ok(parsed_r).patches[0];
+  ASSERT_EQ(parsed.ams, 1);
+  ASSERT_EQ(parsed.fms, 4);
+  ASSERT_TRUE(!parsed.dac_enable);
+  ASSERT_TRUE(!parsed.lfo_enable);
+  ASSERT_EQ(parsed.lfo_frequency, 0);
+  ASSERT_TRUE(parsed.left && parsed.right);
+  ASSERT_TRUE(parsed.operators[0].enable);
+  return true;
+}
+
 bool test_dmp_to_mml_roundtrip() {
   auto bytes = read_file(fs::path(TEST_DATA_DIR) / "bright piano.dmp");
   ASSERT_TRUE(!bytes.empty());
@@ -3764,6 +3843,8 @@ int main() {
   std::cout << "\n=== Cross-format roundtrip ===\n";
   RUN_TEST(test_dmp_to_fui_roundtrip);
   RUN_TEST(test_dmp_to_gin_roundtrip);
+  RUN_TEST(test_gin_leaves_out_playback_settings);
+  RUN_TEST(test_gin_ignores_stored_playback_settings);
   RUN_TEST(test_dmp_to_mml_roundtrip);
 
   std::cout << "\n=== DMF tests ===\n";

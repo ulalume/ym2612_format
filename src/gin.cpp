@@ -25,8 +25,6 @@ Operator op_from_json(const Json &j) {
   op.ssg = j.at("ssg_type_envelope_control").get_uint8();
   op.ssg_enable = j.at("ssg_enable").get_bool();
   op.am = j.at("amplitude_modulation_enable").get_bool();
-  if (j.contains("enable"))
-    op.enable = j.at("enable").get_bool();
   return op;
 }
 
@@ -44,7 +42,6 @@ Json op_to_json(const Operator &op) {
   j["ssg_type_envelope_control"] = Json(static_cast<int>(op.ssg));
   j["ssg_enable"] = Json(op.ssg_enable);
   j["amplitude_modulation_enable"] = Json(op.am);
-  j["enable"] = Json(op.enable);
   return j;
 }
 
@@ -169,16 +166,11 @@ ParseResult parse(const uint8_t *data, size_t size, const std::string &name) {
     Patch patch;
     patch.name = j.at("name").get_string();
 
-    // Device / global
-    const auto &dev = j.at("device");
-    patch.dac_enable = dev.at("dac_enable").get_bool();
-    patch.lfo_enable = dev.at("lfo_enable").get_bool();
-    patch.lfo_frequency = dev.at("lfo_frequency").get_uint8();
+    // The DAC and LFO switches, the LFO's frequency, the speakers and each
+    // operator's enable are not read: see gin.hpp.
 
     // Channel
     const auto &ch = j.at("channel");
-    patch.left = ch.at("left_speaker").get_bool();
-    patch.right = ch.at("right_speaker").get_bool();
     patch.ams =
         ch.at("amplitude_modulation_sensitivity").get_uint8();
     patch.fms =
@@ -224,20 +216,12 @@ SerializeResult serialize(const Patch &patch) {
     inst["algorithm"] = Json(static_cast<int>(patch.algorithm));
     inst["operators"] = std::move(ops);
 
-    Json dev = Json::object();
-    dev["dac_enable"] = Json(patch.dac_enable);
-    dev["lfo_enable"] = Json(patch.lfo_enable);
-    dev["lfo_frequency"] = Json(static_cast<int>(patch.lfo_frequency));
-
     Json ch = Json::object();
-    ch["left_speaker"] = Json(patch.left);
-    ch["right_speaker"] = Json(patch.right);
     ch["amplitude_modulation_sensitivity"] = Json(static_cast<int>(patch.ams));
     ch["frequency_modulation_sensitivity"] = Json(static_cast<int>(patch.fms));
 
     Json j = Json::object();
     j["name"] = Json(patch.name);
-    j["device"] = std::move(dev);
     j["channel"] = std::move(ch);
     j["instrument"] = std::move(inst);
 

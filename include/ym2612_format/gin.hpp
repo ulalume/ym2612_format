@@ -9,7 +9,11 @@ namespace ym2612_format::gin {
 /// GIN format — a simple JSON representation of a YM2612 patch.
 ///
 /// Uses the same JSON schema as megatoy's native .gin format.
-/// Requires nlohmann/json.
+///
+/// Not stored: the DAC enable, the LFO's enable and frequency, the L/R
+/// speakers and each operator's enable, which say how a patch is played.
+/// Parsing leaves them at their defaults (DAC off, LFO off at 0, both
+/// speakers on, every operator on), whatever the file holds.
 
 FormatInfo info();
 
